@@ -3,6 +3,8 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Sky, Environment, Stats } from '@react-three/drei';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { TEMPLATES } from './templates';
+import { GoogleGenAI, Type } from "@google/genai";
 
 const COLORS = [
   { name: 'White', value: '#FFFFFF' },
@@ -24,40 +26,50 @@ const PLATE_HEIGHT = 1/3;
 const BRICK_SIZES = [
   { id: '1x1', label: '1x1', size: [1, 1] },
   { id: '1x2', label: '1x2', size: [1, 2] },
+  { id: '1x3', label: '1x3', size: [1, 3] },
   { id: '1x4', label: '1x4', size: [1, 4] },
   { id: '1x6', label: '1x6', size: [1, 6] },
   { id: '1x8', label: '1x8', size: [1, 8] },
   { id: '1x10', label: '1x10', size: [1, 10] },
   { id: '2x2', label: '2x2', size: [2, 2] },
+  { id: '2x3', label: '2x3', size: [2, 3] },
   { id: '2x4', label: '2x4', size: [2, 4] },
   { id: '2x6', label: '2x6', size: [2, 6] },
   { id: '2x8', label: '2x8', size: [2, 8] },
   { id: '2x10', label: '2x10', size: [2, 10] },
+  { id: '4x4', label: '4x4', size: [4, 4] },
+  { id: '6x6', label: '6x6', size: [6, 6] },
 ];
 
 const SPECIAL_PARTS = [
   { id: 'slope1x2', label: '1x2 Dach', size: [1, 2, 1], type: 'slope' },
   { id: 'slope2x2', label: '2x2 Dach', size: [2, 2, 1], type: 'slope' },
   { id: 'slope2x4', label: '2x4 Dach', size: [2, 4, 1], type: 'slope' },
+  { id: 'tile1x1', label: '1x1 Fliese', size: [1, 1, PLATE_HEIGHT], type: 'tile' },
   { id: 'tile1x2', label: '1x2 Fliese', size: [1, 2, PLATE_HEIGHT], type: 'tile' },
+  { id: 'tile1x4', label: '1x4 Fliese', size: [1, 4, PLATE_HEIGHT], type: 'tile' },
   { id: 'tile2x2', label: '2x2 Fliese', size: [2, 2, PLATE_HEIGHT], type: 'tile' },
   { id: 'tile2x4', label: '2x4 Fliese', size: [2, 4, PLATE_HEIGHT], type: 'tile' },
+  { id: 'tile4x4', label: '4x4 Fliese', size: [4, 4, PLATE_HEIGHT], type: 'tile' },
   { id: 'corner2x2', label: '2x2 Winkelplatte', size: [2, 2, PLATE_HEIGHT], type: 'corner' },
   // Round Parts
   { id: 'round_1x1_brick', label: '1x1 Rundstein', size: [1, 1, 1], type: 'cylinder' },
   { id: 'round_1x1_plate', label: '1x1 Rundplatte', size: [1, 1, PLATE_HEIGHT], type: 'cylinder' },
-  { id: 'round_1x1_tile', label: '1x1 Rundfliese', size: [1, 1, PLATE_HEIGHT], type: 'round_tile' },
+  { id: 'round_1x1_tile', label: '1x1 Rundfliese', size: [1, 1, PLATE_HEIGHT], type: 'tile' },
+  { id: 'round_2x2_brick', label: '2x2 Rundstein', size: [2, 2, 1], type: 'cylinder' },
+  { id: 'round_2x2_plate', label: '2x2 Rundplatte', size: [2, 2, PLATE_HEIGHT], type: 'cylinder' },
+  { id: 'round_2x2_tile', label: '2x2 Rundfliese', size: [2, 2, PLATE_HEIGHT], type: 'tile' },
   { id: 'round_4x4_brick', label: '4x4 Rundstein', size: [4, 4, 1], type: 'cylinder' },
   { id: 'round_4x4_plate', label: '4x4 Rundplatte', size: [4, 4, PLATE_HEIGHT], type: 'cylinder' },
-  // Extra Parts
-  { id: 'round_2x2_plate', label: '2x2 Rundplatte', size: [2, 2, PLATE_HEIGHT], type: 'cylinder' },
-  { id: 'round_2x2_tile', label: '2x2 Rundfliese', size: [2, 2, PLATE_HEIGHT], type: 'round_tile' },
   { id: 'slope_inv_1x2', label: '1x2 Dach Invers', size: [1, 2, 1], type: 'slope_inv' },
 ];
 
 const PARTS = [
-  ...BRICK_SIZES.map(s => ({ id: `brick_${s.id}`, label: `${s.label} Stein`, size: [s.size[0], s.size[1], 1], type: 'box' })),
-  ...BRICK_SIZES.map(s => ({ id: `plate_${s.id}`, label: `${s.label} Platte`, size: [s.size[0], s.size[1], PLATE_HEIGHT], type: 'box' })),
+  // 1. STANDARD BRICKS (sorted by size)
+  ...BRICK_SIZES.map(s => ({ id: `brick_${s.id}`, label: `${s.label} Stein`, size: [s.size[0], s.size[1], 1], type: 'brick' })),
+  // 2. STANDARD PLATES (sorted by size)
+  ...BRICK_SIZES.map(s => ({ id: `plate_${s.id}`, label: `${s.label} Platte`, size: [s.size[0], s.size[1], PLATE_HEIGHT], type: 'plate' })),
+  // 3. SPECIAL PARTS (slopes, etc.)
   ...SPECIAL_PARTS
 ];
 
@@ -219,9 +231,11 @@ function useBrickGeometries() {
       const visualParts = [];
       
       // Base Shape
-      if (part.type === 'box' || part.type === 'tile') {
+      const isRound = part.id.includes('round') || part.type === 'cylinder' || part.type === 'round_tile';
+      
+      if ((part.type === 'box' || part.type === 'tile' || part.type === 'brick' || part.type === 'plate') && !isRound) {
          visualParts.push(new THREE.BoxGeometry(wActual, h, dActual));
-      } else if (part.type === 'cylinder' || part.type === 'round_tile' || part.type === 'cylinder_hole') {
+      } else if (isRound || part.type === 'cylinder_hole') {
          if (part.type === 'cylinder_hole') {
             const outerRadius = wActual / 2;
             const innerRadius = 0.1;
@@ -271,7 +285,7 @@ function useBrickGeometries() {
       }
 
       // Add studs for boxes and corners (excluding tiles and slopes)
-      if (part.type === 'box' || part.type === 'corner' || part.type === 'cylinder' || part.type === 'cone' || part.type === 'slope_inv') {
+      if (part.type === 'box' || part.type === 'brick' || part.type === 'plate' || part.type === 'corner' || part.type === 'cylinder' || part.type === 'cone' || part.type === 'slope_inv') {
         const studGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.1, 16);
         for (let x = 0; x < w; x++) {
           for (let z = 0; z < d; z++) {
@@ -298,7 +312,7 @@ function useBrickGeometries() {
       }
 
       // Add underside "holes" (negative cylinders)
-      if (part.type === 'box' || part.type === 'corner' || part.type === 'cylinder' || part.type === 'slope') {
+      if (part.type === 'box' || part.type === 'brick' || part.type === 'plate' || part.type === 'corner' || part.type === 'cylinder' || part.type === 'slope') {
         const holeGeo = new THREE.CylinderGeometry(0.17, 0.17, 0.05, 12);
         for (let x = 0; x < w; x++) {
           for (let z = 0; z < d; z++) {
@@ -318,6 +332,8 @@ function useBrickGeometries() {
           }
         }
       }
+
+      if (visualParts.length === 0) return;
 
       const mergedVisual = mergeGeometries(visualParts.map(g => g.index ? g.toNonIndexed() : g));
       if (mergedVisual) {
@@ -735,6 +751,19 @@ export default function App() {
     }
   }, []);
 
+  /**
+   * Loads a complete pre-defined template into the workspace.
+   */
+  const loadTemplate = useCallback((template: any) => {
+    const newBlocks = template.blocks.map((b: any, index: number) => ({
+      ...b,
+      id: `template-${template.id}-${index}-${Date.now()}`
+    }));
+    updateBlocks(newBlocks);
+    setSimulationMessage({ text: `${template.name} geladen!`, type: 'success' });
+    setTimeout(() => setSimulationMessage(null), 3000);
+  }, [updateBlocks]);
+
   const [currentColor, setCurrentColor] = useState(COLORS[0].value);
   const [currentPartId, setCurrentPartId] = useState('brick_2x2');
   const [isPlate, setIsPlate] = useState(false);
@@ -747,9 +776,12 @@ export default function App() {
   const [gravityStrength, setGravityStrength] = useState(9.8);
   const [gravityMode, setGravityMode] = useState<'up' | 'explosion'>('up');
   const [fallingGroups, setFallingGroups] = useState<any[]>([]);
+  const [sidebarTab, setSidebarTab] = useState<'katalog' | 'vorlagen' | 'ki' | 'werkzeug'>('katalog');
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeCategory, setActiveCategory] = useState<'All' | 'Brick' | 'Plate' | 'Round' | 'Special'>('All');
+  const [activeCategory, setActiveCategory] = useState<'All' | 'Brick' | 'Plate' | 'Tile' | 'Round' | 'Special'>('All');
   const [showGrid, setShowGrid] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
   const [simulationMessage, setSimulationMessage] = useState<{ text: string, type: 'success' | 'warning' | 'error' } | null>(null);
   const [isShiftActive, setIsShiftActive] = useState(false);
   const [currentHeight, setCurrentHeight] = useState(0);
@@ -760,10 +792,11 @@ export default function App() {
       if (!matchesSearch) return false;
       
       if (activeCategory === 'All') return true;
-      if (activeCategory === 'Brick' && p.id.startsWith('brick_') && !p.id.includes('round')) return true;
-      if (activeCategory === 'Plate' && p.id.startsWith('plate_') && !p.id.includes('round')) return true;
-      if (activeCategory === 'Round' && (p.type === 'cylinder' || p.type === 'round_tile' || p.type === 'cone' || p.type === 'cylinder_hole' || p.id.includes('round'))) return true;
-      if (activeCategory === 'Special' && (p.type === 'slope' || p.type === 'corner' || p.type === 'tile' || p.type === 'slope_inv')) return true;
+      if (activeCategory === 'Brick' && p.type === 'brick') return true;
+      if (activeCategory === 'Plate' && p.type === 'plate') return true;
+      if (activeCategory === 'Tile' && p.type === 'tile') return true;
+      if (activeCategory === 'Round' && (p.type === 'cylinder' || p.id.includes('round'))) return true;
+      if (activeCategory === 'Special' && (p.type === 'slope' || p.type === 'corner' || p.type === 'slope_inv')) return true;
       
       return false;
     });
@@ -1014,6 +1047,82 @@ export default function App() {
     reader.readAsText(file);
     e.target.value = '';
   };
+
+  const handleAiBuild = async () => {
+    if (!aiPrompt.trim() || isAiLoading) return;
+    setIsAiLoading(true);
+    try {
+      const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
+      const partsList = PARTS.map(p => p.id).join(', ');
+      const colorsList = COLORS.map(c => `${c.name}: ${c.value}`).join(', ');
+      const systemPrompt = `You are an expert 3D Brick Architect for a digital building simulator. 
+Your task is to generate a JSON array of blocks to build the user's request.
+
+COORDINATE SYSTEM:
+- World Space: X (left/right), Y (up/down), Z (front/back).
+- Floor Level: All models MUST start on the floor (y = -0.5 is the baseplate).
+- Vertical alignment (Y):
+  * Center of a Brick sitting on the floor: y = 0
+  * Center of a Plate sitting on the floor: y = -0.333
+  * Stacking: Add 1.0 to y for each brick layer. Add 0.333 to y for each plate layer.
+- Horizontal alignment (X/Z): Use steps of 0.5.
+
+STRUCTURAL RULES:
+1. VOLUMETRIC 3D: Build in all three dimensions (X, Y, and Z). Avoid flat 2D silhouettes. Create depth, thickness, and volume.
+2. SOLIDS: Surfaces should be closed where possible. Gaps should be intentional features, not structural bugs.
+3. GROUNDING: The bottom-most layer of the model MUST be placed exactly on the floor or connected to the ground. No floating parts.
+4. GRID SNAP: Ensure all coordinates are perfectly aligned to the grid (0.5 increments for X/Z).
+5. LIMITS: Max 80 blocks. Use a mix of bricks and plates for detail.
+
+ALLOWED PARTS: ${partsList}
+ALLOWED COLORS: ${colorsList}
+
+OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "partId", "color", "rotation" (0-3). No markdown.`;
+      const response = await genAI.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Build: ${aiPrompt}`,
+        config: { systemInstruction: systemPrompt, responseMimeType: "application/json" }
+      });
+      const generatedBlocks = JSON.parse(response.text);
+      if (generatedBlocks && generatedBlocks.length > 0) {
+        // 1. Find the lowest point to offset the whole model to the floor
+        let minY = Infinity;
+        generatedBlocks.forEach((b: any) => {
+          if (b.position && typeof b.position[1] === 'number') {
+            const isPlate = b.partId?.includes('plate') || b.partId?.includes('tile');
+            const bottom = b.position[1] - (isPlate ? 1/6 : 0.5);
+            if (bottom < minY) minY = bottom;
+          }
+        });
+
+        // Current baseplate floor is at y = -0.5
+        const yOffset = -0.5 - minY;
+
+        // 2. Apply offset and strict grid snapping
+        const cleanedBlocks = generatedBlocks.map((b: any, i: number) => {
+          const px = Math.round(b.position[0] * 2) / 2;
+          const py = b.position[1] + yOffset;
+          const pz = Math.round(b.position[2] * 2) / 2;
+          
+          return {
+            ...b,
+            id: `ai-${Date.now()}-${i}`,
+            position: [px, py, pz],
+            rotation: Math.max(0, Math.min(3, Math.round(b.rotation || 0)))
+          };
+        });
+
+        updateBlocks([...blocks, ...cleanedBlocks]);
+      }
+      setAiPrompt('');
+      setSimulationMessage({ text: 'KI hat das Modell herbeigezaubert!', type: 'success' });
+      setTimeout(() => setSimulationMessage(null), 3000);
+    } catch (err) {
+      console.error("AI Build failed:", err);
+      setSimulationMessage({ text: 'KI Baufehler.', type: 'error' });
+      setTimeout(() => setSimulationMessage(null), 3000);
+    } finally { setIsAiLoading(false); }
+  };
   
   /**
    * Global Event Listeners: Handles keyboard shortcuts (Undo/Redo, Rotation)
@@ -1132,166 +1241,252 @@ export default function App() {
       <main className="flex-1 flex relative overflow-hidden">
         
         {/* Left Sidebar: Controls and Brick Palette */}
-        <aside className="w-[280px] bg-white border-r border-[#d1d5db] flex flex-col p-5 shrink-0 z-10 overflow-y-auto">
+        <aside className="w-[300px] bg-white border-r border-[#d1d5db] flex flex-col shrink-0 z-10 overflow-hidden shadow-xl">
           
-          <div className="mb-6">
-             <h3 className="text-xs uppercase tracking-wider text-[#6b7280] mb-3 font-semibold">Anleitung</h3>
-             <div className="text-sm text-[#1f2937] space-y-1">
-                <p>• Linksklick: Platzieren</p>
-                <p>• Rechtsklick: Löschen</p>
-                <p>• Mausrad: Kamera Zoom</p>
-                <p>• Shift + Maus: Höhe fixieren</p>
-             </div>
-          </div>
+          <div className="p-5 border-b border-gray-100 bg-gray-50/30">
+            <div className="flex items-center gap-2 mb-4">
+               <div className="w-8 h-8 bg-[#2563eb] rounded-lg flex items-center justify-center text-white font-black lg shadow-sm">B</div>
+               <h1 className="text-lg font-black text-[#111827] tracking-tighter uppercase">Brickcraft</h1>
+            </div>
 
-          <div className="mb-6">
-             <h3 className="text-xs uppercase tracking-wider text-[#6b7280] mb-3 font-semibold">Ansicht</h3>
-             <button 
-                onClick={() => setShowGrid(!showGrid)}
-                className={`w-full py-2 rounded-md border text-[11px] font-bold transition-all ${showGrid ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-gray-200 text-gray-500'}`}
-             >
-                {showGrid ? 'Gitter ausblenden' : 'Gitter einblenden'}
-             </button>
-          </div>
-
-          <div className="mb-6">
-             <h3 className="text-xs uppercase tracking-wider text-[#6b7280] mb-3 font-semibold">Farben</h3>
-             <div className="flex flex-wrap gap-2">
-               {COLORS.map(c => (
-                 <button
-                   key={c.value}
-                   className="w-6 h-6 rounded-full cursor-pointer transition-transform hover:scale-110 active:scale-95"
-                   style={{ 
-                     backgroundColor: c.value,
-                     border: currentColor === c.value ? '2px solid white' : (c.value === '#FFFFFF' ? '1px solid #d1d5db' : 'none'),
-                     boxShadow: currentColor === c.value ? '0 0 0 1px #2563eb' : (c.value === '#FFFFFF' ? 'none' : '0 0 0 1px rgba(0,0,0,0.1)')
-                   }}
-                   onClick={() => setCurrentColor(c.value)}
-                   title={c.name}
-                   aria-label={`Select color ${c.name}`}
-                 />
-               ))}
-             </div>
-          </div>
-
-          <div className="mb-6">
-             <h3 className="text-xs uppercase tracking-wider text-[#6b7280] mb-3 font-semibold">Bauteile</h3>
-             
-             <input 
-                type="text" 
-                placeholder="Suchen..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-200 rounded-md text-xs mb-3 outline-none focus:border-blue-400"
-             />
-
-             <div className="flex flex-wrap gap-1 mb-4">
-                {['All', 'Brick', 'Plate', 'Round', 'Special'].map((cat: any) => (
-                   <button 
-                      key={cat}
-                      onClick={() => setActiveCategory(cat)}
-                      className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-tighter transition-all ${activeCategory === cat ? 'bg-[#2563eb] text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}
-                   >
-                      {cat}
-                   </button>
-                ))}
-             </div>
-
-             <div className="grid grid-cols-2 gap-2 max-h-[400px] overflow-y-auto pr-1">
-                {filteredParts.map(p => (
-                   <div 
-                      key={p.id}
-                      onClick={() => setCurrentPartId(p.id)}
-                      className={`border rounded-lg p-2 flex flex-col items-center justify-center gap-1 cursor-pointer transition-all ${currentPartId === p.id ? 'border-[#2563eb] bg-blue-50' : 'border-[#d1d5db] hover:bg-gray-50'}`}
-                   >
-                      <span className="text-[10px] font-medium text-center leading-tight">{p.label}</span>
-                      <span className="text-[9px] text-gray-400 uppercase">{p.id.includes('plate') ? '1/3' : '1/1'}</span>
-                   </div>
-                ))}
-             </div>
-          </div>
-
-          <div className="mb-6">
-             <h3 className="text-xs uppercase tracking-wider text-[#6b7280] mb-3 font-semibold">Simulation</h3>
-             <div className="space-y-4 mb-4">
-                <button
-                  onClick={handlePhysicsCheck}
-                  className="w-full py-2.5 rounded-lg border-2 border-[#10b981] bg-[#ecfdf5] text-[#047857] text-sm font-bold hover:bg-[#d1fae5] transition-colors cursor-pointer flex items-center justify-center gap-2"
-                >
-                  🌍 Gravitation prüfen
-                </button>
-
-                <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
-                   <div className="flex justify-between items-center mb-2">
-                      <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-tighter">Stärke [m/s²]</span>
-                      <span className="text-[11px] font-mono font-bold text-blue-600">{gravityStrength.toFixed(1)}</span>
-                   </div>
-                   <input 
-                      type="range" 
-                      min="1" 
-                      max="20" 
-                      step="0.1"
-                      value={gravityStrength} 
-                      onChange={(e) => setGravityStrength(Number(e.target.value))}
-                      className="w-full accent-blue-600 cursor-pointer"
-                   />
-                </div>
-
-                <div className="flex bg-gray-100 p-1 rounded-lg">
-                   <button 
-                      onClick={() => setGravityMode('up')}
-                      className={`flex-1 py-1 text-[11px] font-bold rounded-md transition-all ${gravityMode === 'up' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                   >
-                      ANTI-GRAV
-                   </button>
-                   <button 
-                      onClick={() => setGravityMode('explosion')}
-                      className={`flex-1 py-1 text-[11px] font-bold rounded-md transition-all ${gravityMode === 'explosion' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                   >
-                      EXPLOSION
-                   </button>
-                </div>
-             </div>
-          </div>
-
-          <div className="mb-6">
-             <h3 className="text-xs uppercase tracking-wider text-[#6b7280] mb-3 font-semibold">Projekt</h3>
-             <div className="flex gap-2 mb-4">
-                <button 
-                  onClick={handleSave}
-                  className="flex-1 py-2 rounded-md border border-[#d1d5db] bg-white text-xs font-medium hover:bg-gray-50 transition-colors cursor-pointer text-center"
-                >
-                  Speichern
-                </button>
-                <div className="flex-1">
-                  <input 
-                    type="file" 
-                    id="load-file" 
-                    accept=".txt" 
-                    onChange={handleLoad} 
-                    className="hidden" 
-                  />
-                  <label 
-                    htmlFor="load-file" 
-                    className="block w-full py-2 rounded-md border border-[#d1d5db] bg-white text-xs font-medium hover:bg-gray-50 transition-colors cursor-pointer text-center"
+            <div className="flex bg-gray-100 p-1 rounded-lg">
+               {[
+                 { id: 'katalog', label: 'Bausatz' },
+                 { id: 'vorlagen', label: 'Vorlagen' },
+                 { id: 'ki', label: 'KI' },
+                 { id: 'werkzeug', label: 'Werkzeug' }
+               ].map((tab) => (
+                  <button 
+                     key={tab.id}
+                     onClick={() => setSidebarTab(tab.id as any)}
+                     className={`flex-1 py-1.5 text-[10px] font-bold rounded-md transition-all uppercase tracking-tighter ${sidebarTab === tab.id ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
                   >
-                    Laden
-                  </label>
-                </div>
-             </div>
-
-             <h3 className="text-xs uppercase tracking-wider text-[#6b7280] mb-3 font-semibold">Einstellungen</h3>
-             <div className="flex items-center justify-between">
-               <span className="text-sm font-medium text-[#1f2937]">Raster-Snap (Grid)</span>
-               <button
-                 onClick={() => setSnapToGrid(!snapToGrid)}
-                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${snapToGrid ? 'bg-[#2563eb]' : 'bg-[#d1d5db]'}`}
-               >
-                 <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${snapToGrid ? 'translate-x-5' : 'translate-x-1'}`} />
-               </button>
-             </div>
+                     {tab.label}
+                  </button>
+               ))}
+            </div>
           </div>
 
+          <div className="flex-1 overflow-y-auto p-5 custom-scrollbar space-y-8">
+            
+            {sidebarTab === 'katalog' && (
+              <div className="animate-in fade-in slide-in-from-left-2 duration-300">
+                <section className="mb-8">
+                   <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-4 flex items-center gap-2">
+                     <span className="w-4 h-[1px] bg-gray-200" /> Ausgewählte Farbe
+                   </h3>
+                   <div className="flex flex-wrap gap-2.5">
+                     {COLORS.map(c => (
+                       <button
+                         key={c.value}
+                         className="w-6 h-6 rounded-full cursor-pointer transition-all hover:scale-110 active:scale-95 shadow-sm"
+                         style={{ 
+                           backgroundColor: c.value,
+                           border: currentColor === c.value ? '2px solid white' : (c.value === '#FFFFFF' ? '1px solid #e5e7eb' : 'none'),
+                           boxShadow: currentColor === c.value ? '0 0 0 2px #2563eb' : '0 1px 2px rgba(0,0,0,0.1)'
+                         }}
+                         onClick={() => setCurrentColor(c.value)}
+                         title={c.name}
+                       />
+                     ))}
+                   </div>
+                </section>
+
+                <section>
+                   <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-4 flex items-center gap-2">
+                     <span className="w-4 h-[1px] bg-gray-200" /> Bauteile
+                   </h3>
+                   
+                   <div className="relative mb-3">
+                      <input 
+                         type="text" 
+                         placeholder="Suchen..."
+                         value={searchTerm}
+                         onChange={(e) => setSearchTerm(e.target.value)}
+                         className="w-full pl-8 pr-3 py-2 border border-gray-100 bg-gray-50 rounded-lg text-xs outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-300 transition-all"
+                      />
+                      <span className="absolute left-3 top-2.5 opacity-30 text-[10px]">🔍</span>
+                   </div>
+
+                   <div className="flex flex-wrap gap-1 mb-4 overflow-x-auto pb-1 no-scrollbar">
+                      {['All', 'Brick', 'Plate', 'Tile', 'Round', 'Special'].map((cat: any) => (
+                         <button 
+                            key={cat}
+                            onClick={() => setActiveCategory(cat)}
+                            className={`px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-wider transition-all whitespace-nowrap border ${activeCategory === cat ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-100' : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'}`}
+                         >
+                            {cat === 'Brick' ? 'Steine' : cat === 'Plate' ? 'Platten' : cat === 'Tile' ? 'Fliesen' : cat === 'Round' ? 'Rund' : cat === 'Special' ? 'Spezial' : 'Alle'}
+                         </button>
+                      ))}
+                   </div>
+
+                   <div className="grid grid-cols-2 gap-2">
+                      {filteredParts.map(p => (
+                         <div 
+                            key={p.id}
+                            onClick={() => setCurrentPartId(p.id)}
+                            className={`group relative border rounded-xl p-3 flex flex-col items-center justify-center gap-1 cursor-pointer transition-all hover:shadow-md ${currentPartId === p.id ? 'border-blue-500 bg-blue-50/50 ring-1 ring-blue-500 shadow-sm' : 'border-gray-100 bg-white hover:border-blue-200'}`}
+                         >
+                            <span className={`text-[10px] font-bold text-center leading-tight transition-colors ${currentPartId === p.id ? 'text-blue-700' : 'text-gray-700 group-hover:text-blue-600'}`}>{p.label}</span>
+                            <span className="text-[8px] font-mono font-bold text-gray-300 uppercase tracking-widest">{p.id.split('_').slice(1).join(' ')}</span>
+                            {currentPartId === p.id && (
+                              <div className="absolute top-1 right-2 w-1.5 h-1.5 bg-blue-500 rounded-full" />
+                            )}
+                         </div>
+                      ))}
+                   </div>
+                </section>
+              </div>
+            )}
+
+            {sidebarTab === 'vorlagen' && (
+              <div className="animate-in fade-in slide-in-from-left-2 duration-300">
+                <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-6 flex items-center gap-2">
+                   <span className="w-4 h-[1px] bg-gray-200" /> Bauvorlagen
+                </h3>
+                <div className="grid grid-cols-1 gap-3">
+                   {TEMPLATES.map(t => (
+                      <div 
+                         key={t.id}
+                         onClick={() => loadTemplate(t)}
+                         className="border border-gray-100 rounded-2xl p-5 flex flex-col gap-2 cursor-pointer transition-all bg-white hover:shadow-xl hover:border-blue-100 hover:-translate-y-0.5 group active:scale-[0.98]"
+                      >
+                         <div className="flex justify-between items-start">
+                            <span className="text-[13px] font-black text-gray-800 tracking-tight leading-none">{t.name}</span>
+                            <div className="w-6 h-6 rounded-full bg-blue-50 flex items-center justify-center text-blue-500 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">→</div>
+                         </div>
+                         <p className="text-[10px] text-gray-400 leading-relaxed pr-4">{t.description}</p>
+                         <div className="mt-2 text-[9px] font-black text-blue-600 uppercase tracking-widest bg-blue-50 px-2 py-1 rounded-lg self-start">
+                            JETZT LADEN
+                         </div>
+                      </div>
+                   ))}
+                </div>
+              </div>
+            )}
+
+            {sidebarTab === 'ki' && (
+              <div className="animate-in fade-in slide-in-from-left-2 duration-300">
+                <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-6 flex items-center gap-2">
+                   <span className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
+                   Wunsch-Baumeister
+                </h3>
+                <div className="p-6 rounded-3xl bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-100/50 shadow-sm">
+                  <p className="text-[10px] text-purple-700/60 font-bold mb-4 uppercase tracking-widest leading-none">Generative KI</p>
+                  <textarea 
+                     rows={3}
+                     placeholder="Was soll ich bauen? (z.B. Palme, Hund, kleiner Flieger)"
+                     value={aiPrompt}
+                     onChange={(e) => setAiPrompt(e.target.value)}
+                     className="w-full px-4 py-3 border border-purple-200 rounded-2xl text-xs outline-none focus:ring-4 focus:ring-purple-100 focus:border-purple-300 bg-white shadow-inner resize-none mb-4 transition-all"
+                     disabled={isAiLoading}
+                  />
+                  <button 
+                    onClick={handleAiBuild}
+                    disabled={isAiLoading || !aiPrompt.trim()}
+                    className={`w-full py-3.5 rounded-2xl text-[11px] font-black uppercase tracking-widest shadow-xl shadow-purple-200/50 transition-all flex items-center justify-center gap-2 active:scale-95 ${isAiLoading ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:opacity-90'}`}
+                  >
+                    {isAiLoading ? 'Zaubert... 🪄' : 'Herbeizaubern'}
+                  </button>
+                  <p className="mt-4 text-[9px] text-purple-400 text-center leading-relaxed">Die KI berechnet ein dreidimensionales Modell und platziert es im Raster.</p>
+                </div>
+              </div>
+            )}
+
+            {sidebarTab === 'werkzeug' && (
+              <div className="animate-in fade-in slide-in-from-left-2 duration-300 space-y-10">
+                <section>
+                   <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-4 flex items-center gap-2">
+                     <span className="w-4 h-[1px] bg-gray-200" /> Physik-Simulation
+                   </h3>
+                   <div className="space-y-4">
+                      <button
+                        onClick={handlePhysicsCheck}
+                        className="w-full py-3 rounded-xl border-2 border-emerald-500 bg-emerald-50 text-emerald-700 text-[11px] font-black uppercase tracking-widest hover:bg-emerald-100 transition-all shadow-md shadow-emerald-100 flex items-center justify-center gap-2 active:scale-95"
+                      >
+                        🌍 Gravitation prüfen
+                      </button>
+
+                      <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100 shadow-inner">
+                         <div className="flex justify-between items-center mb-3">
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Stärke</span>
+                            <span className="text-xs font-mono font-bold text-blue-600">{gravityStrength.toFixed(1)} m/s²</span>
+                         </div>
+                         <input 
+                            type="range" 
+                            min="1" 
+                            max="20" 
+                            step="0.1"
+                            value={gravityStrength} 
+                            onChange={(e) => setGravityStrength(Number(e.target.value))}
+                            className="w-full accent-blue-600 cursor-pointer"
+                         />
+                      </div>
+
+                      <div className="flex bg-gray-100 p-1 rounded-xl">
+                         {['up', 'explosion'].map(mode => (
+                           <button 
+                              key={mode}
+                              onClick={() => setGravityMode(mode as any)}
+                              className={`flex-1 py-1.5 text-[9px] font-black rounded-lg transition-all uppercase tracking-widest ${gravityMode === mode ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
+                           >
+                              {mode === 'up' ? 'Anti-Grav' : 'Explosion'}
+                           </button>
+                         ))}
+                      </div>
+                   </div>
+                </section>
+
+                <section>
+                   <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-4 flex items-center gap-2">
+                     <span className="w-4 h-[1px] bg-gray-200" /> Anleitung
+                   </h3>
+                   <div className="grid grid-cols-1 gap-2">
+                      {[
+                        { key: 'L-Klick', val: 'Platzieren' },
+                        { key: 'R-Klick', val: 'Löschen' },
+                        { key: 'Rad', val: 'Zoom' },
+                        { key: 'Shift', val: 'Höhen-Sperre' },
+                        { key: 'Ctrl+Z', val: 'Undo' },
+                        { key: 'R', val: 'Drehen' }
+                      ].map(item => (
+                        <div key={item.key} className="flex justify-between items-center bg-gray-50/50 p-2 rounded-lg border border-gray-100/50">
+                           <span className="text-[9px] font-mono font-bold text-blue-600 bg-blue-50 px-1 rounded">{item.key}</span>
+                           <span className="text-[10px] text-gray-500 font-medium">{item.val}</span>
+                        </div>
+                      ))}
+                   </div>
+                </section>
+
+                <section>
+                   <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-4 flex items-center gap-2">
+                     <span className="w-4 h-[1px] bg-gray-200" /> Ansicht
+                   </h3>
+                   <div className="flex items-center justify-between p-3 bg-gray-50 rounded-2xl border border-gray-100">
+                     <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Gitternetz</span>
+                     <button 
+                        onClick={() => setShowGrid(!showGrid)}
+                        className={`w-10 h-6 rounded-full relative transition-colors ${showGrid ? 'bg-blue-600' : 'bg-gray-300'}`}
+                     >
+                        <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${showGrid ? 'left-5' : 'left-1'}`} />
+                     </button>
+                   </div>
+                </section>
+              </div>
+            )}
+            
+            {/* Always visible at the bottom of the scroll area or fixed */}
+            <div className="pt-8 border-t border-gray-50 space-y-3">
+               <h3 className="text-[10px] uppercase tracking-widest font-bold text-gray-300 mb-2">System</h3>
+               <div className="flex gap-2">
+                  <button onClick={handleSave} className="flex-1 py-3 bg-white border border-gray-100 rounded-2xl text-[10px] font-bold text-gray-400 uppercase tracking-widest hover:bg-gray-50 hover:text-gray-600 transition-all active:scale-95 shadow-sm">Speichern</button>
+                  <label className="flex-1 py-3 bg-white border border-gray-100 rounded-2xl text-[10px] font-bold text-gray-400 uppercase tracking-widest hover:bg-gray-50 hover:text-gray-600 transition-all active:scale-95 shadow-sm text-center cursor-pointer">
+                    Laden <input type="file" onChange={handleLoad} className="hidden" accept=".txt" />
+                  </label>
+               </div>
+            </div>
+
+          </div>
         </aside>
 
         {/* Right Content: 3D Viewport (React Three Fiber) */}
