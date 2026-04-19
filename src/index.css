@@ -1,0 +1,11 @@
+/* 
+  Global Styles for Brickcraft Builder
+  Imports Tailwind CSS utilities and defines base resets for the 3D viewport.
+*/
+@import "tailwindcss";
+
+@layer base {
+  body, html, #root {
+    @apply w-full h-full p-0 m-0 overflow-hidden;
+  }
+}
