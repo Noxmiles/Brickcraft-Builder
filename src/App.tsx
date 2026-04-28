@@ -1,10 +1,10 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Sky, Environment, Stats } from '@react-three/drei';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { OrbitControls, Sky, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { TEMPLATES } from './templates';
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 
 const COLORS = [
   { name: 'White', value: '#FFFFFF' },
@@ -19,7 +19,18 @@ const COLORS = [
   { name: 'Reddish Brown', value: '#582A12' },
   { name: 'Light Bluish Grey', value: '#A0A5A9' },
   { name: 'Dark Bluish Grey', value: '#6C6E68' },
+  // 90s Translucent
+  { name: 'Trans-Clear', value: '#eeeeee', isTranslucent: true, opacity: 0.4 },
+  { name: 'Trans-Neon Orange', value: '#FF4D00', isTranslucent: true, opacity: 0.5 },
+  { name: 'Trans-Neon Green', value: '#39FF14', isTranslucent: true, opacity: 0.5 },
+  { name: 'Trans-Deep Blue', value: '#002366', isTranslucent: true, opacity: 0.6 },
+  { name: 'Glow White', value: '#ffffff', isGlow: true, emissive: '#ffffff' },
+  { name: 'Glow Red', value: '#ff0000', isGlow: true, emissive: '#ff2222' },
+  { name: 'Glow Cyan', value: '#00ffff', isGlow: true, emissive: '#11ffff' },
+  { name: 'Glow Yellow', value: '#ffff00', isGlow: true, emissive: '#ffff11' },
 ];
+
+const COLOR_MAP = new Map(COLORS.map(c => [c.value, c]));
 
 // Definition of block types. Size is [x, z, y_height] in grid units
 const PLATE_HEIGHT = 1/3;
@@ -73,6 +84,8 @@ const PARTS = [
   ...SPECIAL_PARTS
 ];
 
+const PART_MAP = new Map(PARTS.map(p => [p.id, p]));
+
 /**
  * Grid Snapping and Position Calculation
  * Calculates the snapped grid position based on mouse interaction point, surface normal, and block size.
@@ -125,12 +138,8 @@ function getGridPos(point: THREE.Vector3, normal: THREE.Vector3, size: number[],
  * Robustly handles missing data or NaN values encountered during save/load.
  */
 const normalizePos = (p: any): number[] => {
-  const arr = Array.isArray(p) ? p : [p?.x || 0, p?.y || 0, p?.z || 0];
-  return [
-    isNaN(arr[0]) ? 0 : arr[0],
-    isNaN(arr[1]) ? 0 : arr[1],
-    isNaN(arr[2]) ? 0 : arr[2]
-  ];
+  if (Array.isArray(p)) return [isNaN(p[0]) ? 0 : p[0], isNaN(p[1]) ? 0 : p[1], isNaN(p[2]) ? 0 : p[2]];
+  return [p?.x || 0, p?.y || 0, p?.z || 0];
 };
 
 /**
@@ -221,7 +230,7 @@ function checkCollision(posA: number[], partA: any, rotA: number, posB: number[]
  */
 function useBrickGeometries() {
   return useMemo(() => {
-    const geometries: Record<string, { visual: THREE.BufferGeometry, collision: THREE.BufferGeometry }> = {};
+    const geometries: Record<string, { visual: THREE.BufferGeometry, collision: THREE.BufferGeometry, size: number[] }> = {};
     
     PARTS.forEach(part => {
       const [w, d, h] = part.size;
@@ -354,7 +363,7 @@ function useBrickGeometries() {
       }
       
       if (mergedVisual && collisionGeo) {
-         geometries[part.id] = { visual: mergedVisual, collision: collisionGeo };
+         geometries[part.id] = { visual: mergedVisual, collision: collisionGeo, size: part.size };
       }
     });
     
@@ -377,7 +386,7 @@ function useBrickGeometries() {
  * @returns { supportedIds: Set<string>, fallingIds: Set<string> }
  */
 function performStabilityCheck(blocks: any[], parts: typeof PARTS) {
-  const getPart = (id: string) => parts.find(p => p.id === id);
+    const findPart = (id: string) => PART_MAP.get(id);
   const EPSILON = 0.05;
 
   // Pre-calculate world-space bounding boxes for all active blocks
@@ -412,6 +421,9 @@ function performStabilityCheck(blocks: any[], parts: typeof PARTS) {
         const b2 = blockBoxes[j];
         let connected = false;
 
+        const hasStudsOnTop = (type: string) => ['box', 'brick', 'plate', 'corner', 'cylinder', 'cone', 'slope_inv'].includes(type);
+        const hasHolesOnBottom = (type: string) => ['box', 'brick', 'plate', 'corner', 'cylinder', 'slope', 'tile'].includes(type);
+
         for (const box1 of b1.boxes) {
            for (const box2 of b2.boxes) {
               // Blocks must overlap in XZ plane to potentially connect
@@ -422,18 +434,17 @@ function performStabilityCheck(blocks: any[], parts: typeof PARTS) {
 
               if (overlapXZ) {
                  // Check vertical adjacency (stud-to-hole or hole-to-stud)
-                 // We verify if one block's bottom matches the other's top.
-                 if (Math.abs(box1.minY - box2.maxY) < EPSILON && (b2.part?.type === 'box' || b2.part?.type === 'corner' || b2.part?.type === 'cylinder' || b2.part?.type === 'cone' || b2.part?.type === 'slope_inv')) {
-                    connected = true;
+                 // Case 1: b1 is on top of b2
+                 if (Math.abs(box1.minY - box2.maxY) < EPSILON) {
+                    if (hasStudsOnTop(b2.part?.type) && hasHolesOnBottom(b1.part?.type)) {
+                       connected = true;
+                    }
                  }
-                 if (Math.abs(box2.minY - box1.maxY) < EPSILON && (b1.part?.type === 'box' || b1.part?.type === 'corner' || b1.part?.type === 'cylinder' || b1.part?.type === 'cone' || b1.part?.type === 'slope_inv')) {
-                    connected = true;
-                 }
-                 if (Math.abs(box1.maxY - box2.minY) < EPSILON && (b1.part?.type === 'box' || b1.part?.type === 'corner' || b1.part?.type === 'cylinder' || b1.part?.type === 'cone' || b1.part?.type === 'slope_inv')) {
-                    connected = true;
-                 }
-                 if (Math.abs(box2.maxY - box1.minY) < EPSILON && (b2.part?.type === 'box' || b2.part?.type === 'corner' || b2.part?.type === 'cylinder' || b2.part?.type === 'cone' || b2.part?.type === 'slope_inv')) {
-                    connected = true;
+                 // Case 2: b2 is on top of b1
+                 if (Math.abs(box2.minY - box1.maxY) < EPSILON) {
+                    if (hasStudsOnTop(b1.part?.type) && hasHolesOnBottom(b2.part?.type)) {
+                       connected = true;
+                    }
                  }
               }
            }
@@ -477,6 +488,58 @@ function performStabilityCheck(blocks: any[], parts: typeof PARTS) {
  * Component for animating a group of falling blocks.
  * Uses useFrame for direct Three.js position/rotation updates to ensure high performance.
  */
+const SceneSettings = ({ isNightMode }: { isNightMode: boolean }) => {
+  const { gl, scene } = useThree();
+  const intensityTarget = isNightMode ? 0.45 : 1.0;
+  
+  useEffect(() => {
+    const bgColor = isNightMode ? '#12121c' : '#f3f4f6';
+    gl.setClearColor(bgColor);
+    scene.background = new THREE.Color(bgColor);
+    
+    if (scene) {
+       (scene as any).environmentIntensity = intensityTarget;
+       scene.traverse((obj: any) => {
+          if (obj.isMesh && obj.material) {
+             const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+             materials.forEach((m: any) => {
+                m.needsUpdate = true;
+                if (m.envMapIntensity !== undefined) m.envMapIntensity = intensityTarget;
+             });
+          }
+       });
+    }
+  }, [isNightMode, gl, scene, intensityTarget]);
+
+  // Lock environment intensity to prevent it being overwritten by Environment presets
+  useFrame(() => {
+    if (scene && (scene as any).environmentIntensity !== intensityTarget) {
+      (scene as any).environmentIntensity = intensityTarget;
+    }
+  });
+
+  return null;
+}
+
+const LED_MARKER_GEOMETRY = new THREE.RingGeometry(0.13, 0.16, 32);
+
+const LEDMarker = ({ position, rotation, color }: any) => {
+  return (
+    <mesh position={position} rotation={rotation} geometry={LED_MARKER_GEOMETRY}>
+      <meshBasicMaterial 
+        color={color} 
+        transparent
+        opacity={0.9}
+        polygonOffset
+        polygonOffsetFactor={-1}
+        polygonOffsetUnits={-1}
+        depthTest={true}
+        depthWrite={false}
+      />
+    </mesh>
+  );
+};
+
 const FallingGroup = React.memo(({ group, geometries, onRemove }: any) => {
   const meshRefs = useRef<(THREE.Mesh | null)[]>([]);
   const velocities = useRef<number[]>([]);
@@ -526,34 +589,49 @@ const FallingGroup = React.memo(({ group, geometries, onRemove }: any) => {
     <group>
       {blocks.map((b: any, i: number) => {
         const geoData = geometries[b.partId] || geometries['brick_2x2'];
+        const colorMeta = (COLOR_MAP.get(b.color) || { value: b.color }) as any;
         return (
-          <mesh
-            key={b.id}
-            ref={(el) => {
-              meshRefs.current[i] = el;
-              if (el && !initializedMeshes.current.has(b.id)) {
-                // Initialize position only once to avoid reset conflicts
-                const p = normalizePos(b.position);
-                el.position.set(p[0], p[1], p[2]);
-                initializedMeshes.current.add(b.id);
-              }
-            }}
-            rotation={[0, b.rotation * (Math.PI / 2), 0]}
-            geometry={geoData.visual}
-            castShadow
-            receiveShadow
-            frustumCulled={false}
-          >
-            <meshPhysicalMaterial 
-               color={b.color} 
-               roughness={0.2} 
-               metalness={0.0} 
-               clearcoat={1.0} 
-               clearcoatRoughness={0.1} 
-               transparent={false}
-               opacity={1}
-            />
-          </mesh>
+          <group key={b.id}>
+            <mesh
+              ref={(el) => {
+                meshRefs.current[i] = el;
+                if (el && !initializedMeshes.current.has(b.id)) {
+                  const p = normalizePos(b.position);
+                  el.position.set(p[0], p[1], p[2]);
+                  initializedMeshes.current.add(b.id);
+                }
+              }}
+              rotation={[0, b.rotation * (Math.PI / 2), 0]}
+              geometry={geoData.visual}
+              castShadow
+              receiveShadow
+              frustumCulled={false}
+            >
+          <meshPhysicalMaterial 
+             color={b.color} 
+             roughness={0.1} 
+             metalness={0.0} 
+             clearcoat={1.0} 
+             clearcoatRoughness={0.05} 
+             transparent={colorMeta.isTranslucent}
+             opacity={colorMeta.opacity ?? 1}
+             emissive={colorMeta.isGlow ? new THREE.Color(colorMeta.emissive) : new THREE.Color(0,0,0)}
+             emissiveIntensity={colorMeta.isGlow ? 12.0 : 0}
+             depthWrite={!colorMeta.isTranslucent}
+          />
+            </mesh>
+            {colorMeta.isGlow && (
+               <group 
+                 position={normalizePos(b.position) as any}
+                 rotation={[0, b.rotation * (Math.PI / 2), 0]}
+               >
+                  <LEDMarker position={[0, 0, (geoData.size[1]*0.5)/2 + 0.002]} color={colorMeta.emissive} />
+                  <LEDMarker position={[0, 0, -(geoData.size[1]*0.5)/2 - 0.002]} rotation={[0, Math.PI, 0]} color={colorMeta.emissive} />
+                  <LEDMarker position={[(geoData.size[0]*0.5)/2 + 0.002, 0, 0]} rotation={[0, Math.PI/2, 0]} color={colorMeta.emissive} />
+                  <LEDMarker position={[-(geoData.size[0]*0.5)/2 - 0.002, 0, 0]} rotation={[0, -Math.PI/2, 0]} color={colorMeta.emissive} />
+               </group>
+            )}
+          </group>
         );
       })}
     </group>
@@ -564,7 +642,7 @@ const FallingGroup = React.memo(({ group, geometries, onRemove }: any) => {
  * Visual studs on the baseplate for aesthetic depth.
  * Uses InstancedMesh to render thousands of studs as a single draw call.
  */
-function BaseplateStuds() {
+function BaseplateStuds({ isNightMode }: { isNightMode: boolean }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const size = 32;
   const count = (size * 2) * (size * 2);
@@ -576,7 +654,6 @@ function BaseplateStuds() {
     let idx = 0;
     for (let x = -halfSize; x < halfSize; x++) {
       for (let z = -halfSize; z < halfSize; z++) {
-        // Position studs at the center of each grid square
         temp.position.set(x * 0.5 + 0.25, -0.45, z * 0.5 + 0.25);
         temp.updateMatrix();
         meshRef.current.setMatrixAt(idx++, temp.matrix);
@@ -588,7 +665,10 @@ function BaseplateStuds() {
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, count]} receiveShadow>
       <cylinderGeometry args={[0.15, 0.15, 0.1, 16]} />
-      <meshStandardMaterial color="#d1d5db" roughness={0.6} />
+      <meshStandardMaterial 
+        color={isNightMode ? "#1a1a25" : "#d1d5db"} 
+        roughness={isNightMode ? 0.4 : 0.6} 
+      />
     </instancedMesh>
   );
 }
@@ -598,22 +678,40 @@ function BaseplateStuds() {
  * This allows us to use one InstancedMesh per part type for maximum efficiency.
  */
 const InstancedBlocksGroup = React.memo(({ blocks, geometries, addBlock, removeBlock, updateGhost, snapToGrid, currentRotation, isDrag, currentPart }: any) => {
-  const blocksByPart = useMemo(() => {
-    const map = new Map<string, any[]>();
+  const blocksByMaterial = useMemo(() => {
+    const map = new Map<string, { partId: string, list: any[], materialProps: any }>();
+    
     blocks.forEach((b: any) => {
-      if (!map.has(b.partId)) map.set(b.partId, []);
-      map.get(b.partId)!.push(b);
+      const colorMeta = (COLOR_MAP.get(b.color) || { value: b.color }) as any;
+      const materialType = colorMeta.isTranslucent ? 'T' : colorMeta.isGlow ? 'G' : 'O';
+      const key = `${b.partId}_${materialType}_${b.color}`;
+      
+      if (!map.has(key)) {
+        map.set(key, { 
+          partId: b.partId, 
+          list: [], 
+          materialProps: {
+            transparent: colorMeta.isTranslucent || false,
+            opacity: colorMeta.opacity ?? 1,
+            emissive: colorMeta.emissive ? new THREE.Color(colorMeta.emissive) : new THREE.Color(0, 0, 0),
+            emissiveIntensity: colorMeta.isGlow ? 15.0 : 0,
+            color: b.color,
+          }
+        });
+      }
+      map.get(key)!.list.push(b);
     });
     return map;
   }, [blocks]);
 
   return (
     <>
-      {Array.from(blocksByPart.entries()).map(([partId, blockList]) => (
+      {Array.from(blocksByMaterial.entries()).map(([key, data]) => (
         <InstancedPart 
-           key={partId}
-           partId={partId}
-           blocks={blockList}
+           key={key}
+           partId={data.partId}
+           blocks={data.list}
+           materialProps={data.materialProps}
            geometries={geometries}
            addBlock={addBlock}
            removeBlock={removeBlock}
@@ -628,15 +726,70 @@ const InstancedBlocksGroup = React.memo(({ blocks, geometries, addBlock, removeB
   );
 });
 
-/**
- * Renders an instanced mesh for a specific part type, effectively drawing many blocks
- * of the same shape in a single draw call. Handles color per instance.
- */
-const InstancedPart = ({ partId, blocks, geometries, addBlock, removeBlock, updateGhost, snapToGrid, currentRotation, isDrag, currentPart }: any) => {
+const InstancedLedMarkers = ({ blocks, geoData, color }: any) => {
+   const meshRef = useRef<THREE.InstancedMesh>(null);
+   const count = blocks.length * 4;
+
+   useLayoutEffect(() => {
+      const mesh = meshRef.current;
+      if (!mesh || !geoData || !geoData.size) return;
+
+      const dummy = new THREE.Object3D();
+      const localDummy = new THREE.Object3D();
+      const actualSize = geoData.size.map((s: number) => s * 0.5);
+      
+      blocks.forEach((b: any, i: number) => {
+         const p = normalizePos(b.position);
+         const baseRotation = b.rotation * (Math.PI / 2);
+         
+         const markerConfigs = [
+            { pos: [0, 0, actualSize[1]/2 + 0.002], rot: [0, 0, 0] },
+            { pos: [0, 0, -actualSize[1]/2 - 0.002], rot: [0, Math.PI, 0] },
+            { pos: [actualSize[0]/2 + 0.002, 0, 0], rot: [0, Math.PI/2, 0] },
+            { pos: [-actualSize[0]/2 - 0.002, 0, 0], rot: [0, -Math.PI/2, 0] },
+         ];
+
+         dummy.position.set(p[0], p[1], p[2]);
+         dummy.rotation.set(0, baseRotation, 0);
+         dummy.updateMatrix();
+
+         markerConfigs.forEach((m, mi) => {
+            localDummy.position.set(m.pos[0], m.pos[1], m.pos[2]);
+            localDummy.rotation.set(m.rot[0], m.rot[1], m.rot[2]);
+            localDummy.updateMatrix();
+            
+            const finalMatrix = dummy.matrix.clone().multiply(localDummy.matrix);
+            mesh.setMatrixAt(i * 4 + mi, finalMatrix);
+         });
+      });
+
+      mesh.instanceMatrix.needsUpdate = true;
+   }, [blocks, geoData, color]);
+
+   return (
+      <instancedMesh 
+        ref={meshRef} 
+        args={[LED_MARKER_GEOMETRY, undefined, count]} 
+        frustumCulled={false}
+      >
+         <meshBasicMaterial 
+            color={color} 
+            transparent
+            opacity={0.9} 
+            polygonOffset
+            polygonOffsetFactor={-1}
+            polygonOffsetUnits={-1}
+            depthTest={true}
+            depthWrite={false}
+         />
+      </instancedMesh>
+   );
+};
+
+const InstancedPart = ({ partId, blocks, geometries, addBlock, removeBlock, updateGhost, snapToGrid, currentRotation, isDrag, currentPart, materialProps }: any) => {
   const geoData = geometries[partId] || geometries['brick_2x2'];
   const meshRef = useRef<THREE.InstancedMesh>(null);
 
-  // Sync the instanced mesh matrices and colors whenever the block list changes
   useLayoutEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
@@ -656,70 +809,63 @@ const InstancedPart = ({ partId, blocks, geometries, addBlock, removeBlock, upda
 
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-
-    // Help Three.js with frustum culling
     mesh.computeBoundingSphere();
   }, [blocks]);
 
+  const handlePointerEvent = useCallback((e: any, type: 'move' | 'up' | 'context') => {
+    e.stopPropagation();
+    if (e.instanceId === undefined) return;
+    
+    const block = blocks[e.instanceId];
+    if (!block) return;
+
+    if (type === 'context') {
+      if (!isDrag(e)) removeBlock(block.id);
+      updateGhost(false);
+      return;
+    }
+
+    if (type === 'up' && isDrag(e)) return;
+    if (type === 'up' && (window as any)._shiftIsActive) return;
+
+    const rotAngle = block.rotation * (Math.PI / 2);
+    const n = (e.face?.normal?.clone() || new THREE.Vector3(0, 1, 0));
+    n.applyEuler(new THREE.Euler(0, rotAngle, 0));
+    const gridPos = getGridPos(e.point, n, currentPart.size, snapToGrid, currentRotation);
+
+    if (type === 'move') {
+      updateGhost(true, gridPos);
+    } else {
+      addBlock(gridPos);
+    }
+  }, [blocks, addBlock, removeBlock, updateGhost, snapToGrid, currentRotation, currentPart, isDrag]);
+
   return (
     <group>
-      {/* The visible blocks using instancing */}
-      <instancedMesh ref={meshRef} args={[geoData.visual, undefined, Math.max(1, blocks.length)]} count={blocks.length} castShadow receiveShadow raycast={() => null}>
+      <instancedMesh 
+        ref={meshRef} 
+        args={[geoData.visual, undefined, Math.max(1, blocks.length)]} 
+        count={blocks.length} 
+        castShadow 
+        receiveShadow
+        onPointerUp={(e) => handlePointerEvent(e, 'up')}
+        onPointerMove={(e) => handlePointerEvent(e, 'move')}
+        onContextMenu={(e) => handlePointerEvent(e, 'context')}
+        onPointerOut={(e) => { e.stopPropagation(); updateGhost(false); }}
+      >
         <meshPhysicalMaterial 
-          roughness={0.2} 
+          {...materialProps}
+          roughness={0.1}
           metalness={0.0}
           clearcoat={1.0}
-          clearcoatRoughness={0.1}
+          clearcoatRoughness={0.05}
+          depthWrite={!materialProps.transparent}
         />
       </instancedMesh>
-      
-      {/* Interaction Targets: Invisible collision meshes for intersection and picking */}
-      {blocks.map((b: any) => (
-         <group key={b.id} position={b.position} rotation={[0, b.rotation * (Math.PI / 2), 0]}>
-            {/* Invisible Collision Mesh for Raycasting */}
-            <mesh 
-              geometry={geoData.collision}
-              onPointerUp={(e: any) => {
-                e.stopPropagation();
-                if (isDrag(e)) return;
-                if ((window as any)._shiftIsActive) return;
-                if (e.button === 0) {
-                  // Calculate face normal in world space to determine placement direction
-                  const rotAngle = b.rotation * (Math.PI / 2);
-                  const n = (e.face?.normal?.clone() || new THREE.Vector3(0, 1, 0));
-                  n.applyEuler(new THREE.Euler(0, rotAngle, 0));
-                  addBlock(getGridPos(e.point, n, currentPart.size, snapToGrid, currentRotation));
-                }
-              }}
-              onPointerMove={(e: any) => {
-                e.stopPropagation();
-                const rotAngle = b.rotation * (Math.PI / 2);
-                const n = (e.face?.normal?.clone() || new THREE.Vector3(0, 1, 0));
-                n.applyEuler(new THREE.Euler(0, rotAngle, 0));
-                updateGhost(true, getGridPos(e.point, n, currentPart.size, snapToGrid, currentRotation));
-              }}
-              onPointerOut={(e) => {
-                e.stopPropagation();
-                updateGhost(false);
-              }}
-              onContextMenu={(e: any) => {
-                e.stopPropagation();
-                if (isDrag(e)) return;
-                removeBlock(b.id);
-                updateGhost(false);
-              }}
-            >
-               {/* Non-rendering material strictly for hit detection */}
-               <meshBasicMaterial transparent opacity={0.0} depthWrite={false} colorWrite={false} />
-            </mesh>
-            
-            {/* Semantic outlines (edges) for better depth perception */}
-            <lineSegments raycast={() => null}>
-               <edgesGeometry args={[geoData.visual]} />
-               <lineBasicMaterial color="black" opacity={0.15} transparent depthTest={true} />
-            </lineSegments>
-         </group>
-      ))}
+
+      {materialProps.emissiveIntensity > 0 && (
+         <InstancedLedMarkers blocks={blocks} geoData={geoData} color={materialProps.emissive} />
+      )}
     </group>
   );
 };
@@ -772,11 +918,16 @@ export default function App() {
   const [isValidPlacement, setIsValidPlacement] = useState(true);
   const ghostRef = useRef<THREE.Group>(null);
   const footprintRef = useRef<THREE.Group>(null);
+  const ghostMaterialRef = useRef<THREE.MeshPhysicalMaterial>(null);
+  const ghostEdgesRef = useRef<THREE.LineBasicMaterial>(null);
+  const hudHeightRef = useRef<HTMLSpanElement>(null);
+  const lastValidRef = useRef<boolean>(true);
   
   const [gravityStrength, setGravityStrength] = useState(9.8);
   const [gravityMode, setGravityMode] = useState<'up' | 'explosion'>('up');
   const [fallingGroups, setFallingGroups] = useState<any[]>([]);
   const [sidebarTab, setSidebarTab] = useState<'katalog' | 'vorlagen' | 'ki' | 'werkzeug'>('katalog');
+  const [isNightMode, setIsNightMode] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeCategory, setActiveCategory] = useState<'All' | 'Brick' | 'Plate' | 'Tile' | 'Round' | 'Special'>('All');
   const [showGrid, setShowGrid] = useState(false);
@@ -876,7 +1027,7 @@ export default function App() {
   }, []);
 
   const geometries = useBrickGeometries();
-  const currentPart = useMemo(() => PARTS.find(p => p.id === currentPartId) || PARTS[0], [currentPartId]);
+  const currentPart = useMemo(() => PART_MAP.get(currentPartId) || PARTS[0], [currentPartId]);
 
   /**
    * Updates the "ghost" preview block that follows the mouse.
@@ -892,8 +1043,14 @@ export default function App() {
         ghostRef.current.position.set(pos[0], pos[1], pos[2]);
         ghostPosRef.current = pos;
         
-        // Calculate user-facing height (starting at 0 for floor)
-        setCurrentHeight(pos[1] - currentPart.size[2] * 0.5 + 0.5);
+        // Update user-facing height via ref for performance (direct DOM update)
+        const displayHeight = pos[1] - currentPart.size[2] * 0.5 + 0.5;
+        if (hudHeightRef.current) {
+           hudHeightRef.current.textContent = displayHeight.toFixed(2).replace(/\.00$/, '');
+        }
+
+        // Keep React state in sync but only if it's potentially needed elsewhere (mostly for initial render)
+        // Note: We avoid heavy React re-renders here by only updating state when absolutely necessary
         
         // Update the footprint projector on the baseplate
         if (footprintRef.current) {
@@ -910,17 +1067,38 @@ export default function App() {
           pos[2] - depth/2 >= -50 && pos[2] + depth/2 <= 50 &&
           pos[1] <= 50;
 
-        // Visual feedback for placement validity
         const hasCollision = blocksRef.current.some(b => {
-          const bPart = PARTS.find(p => p.id === b.partId);
+          const bPart = PART_MAP.get(b.partId);
           if (!bPart) return false;
           return checkCollision(pos, currentPart, currentRotation, b.position, bPart, b.rotation);
         });
-        setIsValidPlacement(inBounds && !hasCollision && pos[1] >= -0.45);
+        
+        const nextValid = inBounds && !hasCollision && pos[1] >= -0.45;
+        
+        // Update ghost materials directly to avoid App re-renders
+        if (nextValid !== lastValidRef.current) {
+           lastValidRef.current = nextValid;
+           setIsValidPlacement(nextValid); // Keep state for internal use if needed
+           if (ghostMaterialRef.current) {
+              const baseColor = nextValid ? currentColor : '#ff0000';
+              ghostMaterialRef.current.color.set(baseColor);
+              ghostMaterialRef.current.opacity = nextValid ? 0.5 : 0.8;
+              if (isNightMode) {
+                 ghostMaterialRef.current.emissive.set(nextValid ? currentColor : '#330000');
+                 ghostMaterialRef.current.emissiveIntensity = nextValid ? 0.8 : 1.0;
+              } else {
+                 ghostMaterialRef.current.emissive.set(nextValid ? '#000000' : '#ff0000');
+                 ghostMaterialRef.current.emissiveIntensity = nextValid ? 0.2 : 4.0;
+              }
+           }
+           if (ghostEdgesRef.current) {
+              ghostEdgesRef.current.color.set(nextValid ? (isNightMode ? "#888888" : "black") : "#ff0000");
+           }
+        }
       }
       ghostRef.current.rotation.set(0, currentRotation * (Math.PI / 2), 0);
     }
-  }, [currentRotation, currentPart]);
+  }, [currentRotation, currentPart, isNightMode, currentColor]);
 
   useEffect(() => {
     if (ghostRef.current && ghostRef.current.visible) {
@@ -943,7 +1121,7 @@ export default function App() {
       pos[1] <= 32;
 
     const hasCollision = blocks.some(b => {
-      const bPart = PARTS.find(p => p.id === b.partId);
+      const bPart = PART_MAP.get(b.partId);
       if (!bPart) return false;
       return checkCollision(pos, currentPart, currentRotation, b.position, bPart, b.rotation);
     });
@@ -1175,7 +1353,7 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
            const dy = shiftState.current.startClientY - e.clientY;
            const steps = Math.round(dy / 25);
            
-           const currentPartSize = PARTS.find(p => p.id === currentPartId)?.size || [2,2,1];
+           const currentPartSize = PART_MAP.get(currentPartId)?.size || [2,2,1];
            const sy = currentPartSize[2];
            
            const newY = shiftState.current.baseY + steps * PLATE_HEIGHT;
@@ -1460,6 +1638,24 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
 
                 <section>
                    <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-4 flex items-center gap-2">
+                     <span className="w-4 h-[1px] bg-gray-200" /> Beleuchtung
+                   </h3>
+                   <div className={`flex items-center justify-between p-3 bg-gray-50 rounded-2xl border border-gray-100 ${isNightMode ? 'bg-indigo-50 border-indigo-100' : ''}`}>
+                     <div className="flex flex-col">
+                        <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Nachtmodus</span>
+                        <span className="text-[8px] text-gray-400 font-medium">Schatten & Glow</span>
+                     </div>
+                     <button 
+                        onClick={() => setIsNightMode(!isNightMode)}
+                        className={`w-10 h-6 rounded-full relative transition-colors ${isNightMode ? 'bg-indigo-600' : 'bg-gray-300'}`}
+                     >
+                        <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isNightMode ? 'left-5' : 'left-1'}`} />
+                     </button>
+                   </div>
+                </section>
+
+                <section>
+                   <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-4 flex items-center gap-2">
                      <span className="w-4 h-[1px] bg-gray-200" /> Ansicht
                    </h3>
                    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-2xl border border-gray-100">
@@ -1490,8 +1686,9 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
         </aside>
 
         {/* Right Content: 3D Viewport (React Three Fiber) */}
-        <div className="flex-1 relative flex items-center justify-center p-0 m-0" style={{
-           backgroundImage: 'radial-gradient(circle, #d1d5db 1px, transparent 1px)',
+        <div className="flex-1 relative flex items-center justify-center p-0 m-0 transition-colors duration-500" style={{
+           backgroundImage: `radial-gradient(circle, ${isNightMode ? '#1e1b4b' : '#d1d5db'} 1px, transparent 1px)`,
+           backgroundColor: isNightMode ? '#010103' : '#f3f4f6',
            backgroundSize: '40px 40px'
         }}
         onPointerUp={(e) => {
@@ -1501,21 +1698,52 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
            }
         }}
         >
-          <Canvas shadows camera={{ position: [8, 8, 8], fov: 45 }} gl={{ alpha: true }}>
-        <OrbitControls makeDefault maxPolarAngle={Math.PI / 2} />
-        <ambientLight intensity={0.6} />
-        <directionalLight 
-          position={[10, 20, 10]} 
-          intensity={1.5} 
-          castShadow 
-          shadow-mapSize={[2048, 2048]} 
-          shadow-camera-left={-15}
-          shadow-camera-right={15}
-          shadow-camera-top={15}
-          shadow-camera-bottom={-15}
+          <Canvas 
+            shadows={{ type: THREE.PCFShadowMap }} 
+            camera={{ position: [10, 10, 10], fov: 45 }} 
+            gl={{ alpha: true, antialias: true, stencil: false, depth: true, toneMapping: THREE.ACESFilmicToneMapping }}
+          >
+        <OrbitControls makeDefault maxPolarAngle={Math.PI / 1.8} minDistance={2} maxDistance={100} />
+        
+        <ambientLight 
+          intensity={isNightMode ? 0.35 : 0.6} 
+          color={isNightMode ? "#7788dd" : "#ffffff"} 
         />
         
-        <Environment preset="city" />
+        <directionalLight 
+          position={[10, 20, 10]} 
+          intensity={isNightMode ? 0.35 : 1.5} 
+          color={isNightMode ? "#5566aa" : "#fff4e5"}
+          castShadow 
+          shadow-mapSize={[2048, 2048]} 
+          shadow-camera-left={-25}
+          shadow-camera-right={25}
+          shadow-camera-top={25}
+          shadow-camera-bottom={-25}
+        />
+
+        {isNightMode ? (
+           <group>
+              <pointLight position={[-20, 10, -20]} intensity={0.5} color="#223366" />
+              <pointLight position={[20, 10, 20]} intensity={0.2} color="#112244" />
+              <pointLight position={[0, 15, 0]} intensity={0.3} color="#223388" distance={50} />
+               {blocks.filter(b => COLOR_MAP.get(b.color)?.isGlow).slice(0, 30).map((b) => (
+                  <pointLight 
+                    key={`light-${b.id}`}
+                    position={[b.position[0], b.position[1] + 0.4, b.position[2]]}
+                    intensity={10.0}
+                    distance={8}
+                    color={COLOR_MAP.get(b.color)?.emissive}
+                    decay={2}
+                  />
+               ))}
+           </group>
+        ) : (
+           <Sky sunPosition={[10, 20, 10]} turbidity={0.1} rayleigh={0.5} />
+        )}
+        
+        <Environment preset={isNightMode ? "night" : "city"} />
+        <SceneSettings isNightMode={isNightMode} />
 
         {/* Baseplate / Floor */}
         <mesh 
@@ -1542,14 +1770,22 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
           onContextMenu={(e) => e.stopPropagation()} // Prevent default context menu on floor
         >
           <planeGeometry args={[32, 32]} />
-          <meshStandardMaterial color="#e5e7eb" roughness={0.8} opacity={showGrid ? 0.6 : 1.0} transparent={showGrid} side={THREE.DoubleSide} depthWrite={true} />
+          <meshStandardMaterial 
+            color={isNightMode ? "#2a2a35" : "#e5e7eb"} 
+            roughness={isNightMode ? 0.3 : 0.7} 
+            metalness={isNightMode ? 0.2 : 0.05} 
+            opacity={showGrid ? 0.6 : 1.0} 
+            transparent={showGrid} 
+            side={THREE.DoubleSide} 
+            depthWrite={true} 
+          />
         </mesh>
         
         {/* Environmental Helpers */}
         {showGrid ? (
-          <gridHelper args={[32, 64, 0x000000, 0x000000]} position={[0, -0.49, 0]} material-opacity={0.1} material-transparent />
+          <gridHelper args={[32, 64, isNightMode ? 0x4444ff : 0x000000, isNightMode ? 0x222266 : 0x000000]} position={[0, -0.49, 0]} material-opacity={isNightMode ? 0.2 : 0.1} material-transparent />
         ) : (
-          <BaseplateStuds />
+          <BaseplateStuds isNightMode={isNightMode} />
         )}
 
         {/* The World Content: Bricks being rendered using efficient instancing */}
@@ -1579,15 +1815,18 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
           <group ref={ghostRef} visible={false}>
             <mesh geometry={geometries[currentPartId].visual} raycast={() => null}>
                <meshPhysicalMaterial 
-                  color={isValidPlacement ? currentColor : '#ff0000'}
+                  ref={ghostMaterialRef}
+                  color={currentColor}
                   transparent 
-                  opacity={isValidPlacement ? 0.5 : 0.8}
+                  opacity={0.5}
                   roughness={0.2}
                   depthWrite={false}
+                  emissive={isNightMode ? currentColor : '#000000'}
+                  emissiveIntensity={isNightMode ? 0.8 : 0.2}
                />
                <lineSegments raycast={() => null}>
                   <edgesGeometry args={[geometries[currentPartId].visual]} />
-                  <lineBasicMaterial color={isValidPlacement ? "black" : "#ff0000"} opacity={0.3} transparent depthTest={true} />
+                  <lineBasicMaterial ref={ghostEdgesRef} color={isNightMode ? "#888888" : "black"} opacity={0.3} transparent depthTest={true} />
                </lineSegments>
             </mesh>
             
@@ -1602,8 +1841,6 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
             </group>
           </group>
         )}
-
-        <Stats className="!absolute !bottom-6 !right-6 !top-auto !left-auto !p-2 !rounded-lg !bg-[#e5e7eb] !text-gray-500 !shadow-none" />
       </Canvas>
 
       {/* Floating UI Overlays */}
@@ -1622,8 +1859,8 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-24 bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm font-bold pointer-events-none z-50 shadow-xl flex flex-col items-center animate-in fade-in zoom-in duration-200">
             <span className="text-[9px] opacity-70 uppercase tracking-[0.2em] mb-0.5">Höhen-Ebene</span>
             <div className="flex items-baseline gap-1">
-               <span className="text-lg">
-                  {currentHeight.toFixed(2).replace(/\.00$/, '')}
+               <span className="text-lg" ref={hudHeightRef}>
+                  0
                </span>
                <span className="text-[10px] opacity-60">BRICKS</span>
             </div>
