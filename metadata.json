@@ -1,6 +1,6 @@
 {
   "name": "Brickcraft Builder",
-  "description": "A high-performance 3D brick building simulator in the browser.",
+  "description": "A high-performance 3D construction engine with AI assistance and multi-block selection.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

@@ -1,10 +1,166 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, Sky, Environment } from '@react-three/drei';
+import { OrbitControls, TransformControls, Sky, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { TEMPLATES } from './templates';
 import { GoogleGenAI } from "@google/genai";
+
+import { Volume2, VolumeX, Music, Wind, Search, Info, ExternalLink, ChevronDown, ChevronUp, Zap, Hand, MousePointer2, Hammer, Paintbrush } from 'lucide-react';
+
+const AudioEngine = {
+  ctx: null as AudioContext | null,
+  masterGain: null as GainNode | null,
+  sfxGain: null as GainNode | null,
+  ambientGain: null as GainNode | null,
+  musicGain: null as GainNode | null,
+  
+  // Music tracks
+  musicAudio: null as HTMLAudioElement | null,
+  ambientAudio: null as HTMLAudioElement | null,
+  musicTracks: [
+    '/music/midnight-jazz-cafe.mp3',
+    '/music/rainy-afternoon-chords.mp3',
+    '/music/rainy-day-contemplation.mp3'
+  ],
+  currentTrackIndex: 0,
+  isInitialized: false,
+  
+  init() {
+    if (this.isInitialized) return;
+    try {
+      this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      this.masterGain = this.ctx.createGain();
+      this.sfxGain = this.ctx.createGain();
+      this.ambientGain = this.ctx.createGain();
+      this.musicGain = this.ctx.createGain();
+      
+      this.masterGain.connect(this.ctx.destination);
+      this.sfxGain.connect(this.masterGain);
+      this.ambientGain.connect(this.masterGain);
+      this.musicGain.connect(this.masterGain);
+      
+      // Initialize internal gains to 0. React state will bring them up.
+      this.ambientGain.gain.value = 0;
+      this.musicGain.gain.value = 0;
+
+      this.setupWind();
+      this.setupMusic();
+      this.isInitialized = true;
+    } catch (e) {
+      console.warn("Audio Context failed to initialize", e);
+    }
+  },
+
+  setupMusic() {
+    if (!this.ctx || !this.musicGain) return;
+    this.musicAudio = new Audio();
+    this.musicAudio.crossOrigin = "anonymous";
+    const source = this.ctx.createMediaElementSource(this.musicAudio);
+    source.connect(this.musicGain);
+
+    this.musicAudio.onended = () => {
+      this.playNextTrack();
+    };
+  },
+
+  playNextTrack() {
+    if (!this.musicAudio) return;
+    this.currentTrackIndex = (this.currentTrackIndex + 1) % this.musicTracks.length;
+    this.musicAudio.src = this.musicTracks[this.currentTrackIndex];
+    this.musicAudio.play().catch(() => {});
+  },
+
+  setupWind() {
+    if (!this.ctx || !this.ambientGain) return;
+    this.ambientAudio = new Audio('/music/freesound_community-windy-forest-32853.mp3');
+    this.ambientAudio.crossOrigin = "anonymous";
+    this.ambientAudio.loop = true;
+    const source = this.ctx.createMediaElementSource(this.ambientAudio);
+    source.connect(this.ambientGain);
+  },
+
+  playClick() {
+    if (!this.isInitialized) return;
+    if (this.ctx?.state === 'suspended') this.ctx.resume();
+    if (!this.ctx || !this.sfxGain) return;
+    
+    const t = this.ctx.currentTime + 0.01;
+    
+    // Impact 1: Depth/Thud
+    const osc1 = this.ctx.createOscillator();
+    const g1 = this.ctx.createGain();
+    osc1.type = 'triangle';
+    osc1.frequency.setValueAtTime(150, t);
+    osc1.frequency.exponentialRampToValueAtTime(45, t + 0.05);
+    g1.gain.setValueAtTime(0.25, t);
+    g1.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    osc1.connect(g1);
+    g1.connect(this.sfxGain);
+
+    // Impact 2: Sharp plastic click
+    const bufSize = this.ctx.sampleRate * 0.02;
+    const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+    for(let i=0; i<bufSize; i++) buf.getChannelData(0)[i] = (Math.random() * 2 - 1) * 0.3;
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = buf;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.value = 3200;
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.22, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.018);
+    noise.connect(filter);
+    filter.connect(ng);
+    ng.connect(this.sfxGain);
+
+    osc1.start(t);
+    noise.start(t);
+    osc1.stop(t + 0.05);
+    noise.stop(t + 0.02);
+  },
+
+  playPop() {
+    if (!this.isInitialized || !this.ctx || !this.sfxGain) return;
+    const t = this.ctx.currentTime + 0.01;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(450, t);
+    osc.frequency.exponentialRampToValueAtTime(120, t + 0.08);
+    g.gain.setValueAtTime(0.15, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    osc.connect(g);
+    g.connect(this.sfxGain);
+    osc.start(t);
+    osc.stop(t + 0.08);
+  },
+
+  setSfxVolume(v: number) { 
+    if (this.sfxGain) this.sfxGain.gain.setTargetAtTime(v, this.ctx?.currentTime || 0, 0.1); 
+  },
+  setAmbientVolume(v: number) { 
+    if (this.ambientGain) this.ambientGain.gain.setTargetAtTime(v, this.ctx?.currentTime || 0, 0.1);
+    if (v > 0 && this.ambientAudio && this.ambientAudio.paused) {
+      this.ambientAudio.play().catch(() => {});
+    } else if (v === 0 && this.ambientAudio) {
+      this.ambientAudio.pause();
+    }
+  },
+  setMusicVolume(v: number) { 
+    if (this.musicGain) this.musicGain.gain.setTargetAtTime(v, this.ctx?.currentTime || 0, 0.1);
+    
+    if (v > 0 && this.musicAudio && this.musicAudio.paused) {
+      if (!this.musicAudio.src) {
+        this.musicAudio.src = this.musicTracks[this.currentTrackIndex];
+      }
+      this.musicAudio.play().catch(() => {});
+    } else if (v === 0 && this.musicAudio) {
+      this.musicAudio.pause();
+    }
+  }
+};
+
 
 const COLORS = [
   { name: 'White', value: '#FFFFFF' },
@@ -31,6 +187,33 @@ const COLORS = [
 ];
 
 const COLOR_MAP = new Map(COLORS.map(c => [c.value, c]));
+
+function LicenseItem({ title, license, content }: { title: string, license: string, content: string }) {
+  const [isOpen, setIsOpen] = useState(false);
+  return (
+    <div className="border border-gray-100 rounded-xl overflow-hidden bg-white hover:border-gray-200 transition-colors">
+      <button 
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full h-11 flex items-center justify-between px-4 transition-colors"
+      >
+        <div className="text-left leading-none">
+          <p className="text-[10px] font-black text-gray-800 tracking-tight">{title}</p>
+          <p className="text-[8px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">{license}</p>
+        </div>
+        {isOpen ? <ChevronUp size={12} className="text-gray-400" /> : <ChevronDown size={12} className="text-gray-400" />}
+      </button>
+      {isOpen && (
+        <div className="px-4 pb-4 pt-1">
+          <div className="p-3 bg-gray-50 rounded-lg border border-gray-100/50">
+            <p className="text-[9px] text-gray-500 leading-relaxed font-mono whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar">
+              {content}
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Definition of block types. Size is [x, z, y_height] in grid units
 const PLATE_HEIGHT = 1/3;
@@ -73,9 +256,12 @@ const SPECIAL_PARTS = [
   { id: 'round_4x4_brick', label: '4x4 Rundstein', size: [4, 4, 1], type: 'cylinder' },
   { id: 'round_4x4_plate', label: '4x4 Rundplatte', size: [4, 4, PLATE_HEIGHT], type: 'cylinder' },
   { id: 'slope_inv_1x2', label: '1x2 Dach Invers', size: [1, 2, 1], type: 'slope_inv' },
+  { id: 'logic_wire', label: 'Redstone Kabel', size: [1, 1, PLATE_HEIGHT], type: 'tile' },
+  { id: 'logic_battery', label: 'Batterieblock', size: [2, 2, 1], type: 'brick' },
+  { id: 'logic_led', label: 'LED Block 2x2', size: [2, 2, 1], type: 'brick' },
 ];
 
-const PARTS = [
+export const PARTS = [
   // 1. STANDARD BRICKS (sorted by size)
   ...BRICK_SIZES.map(s => ({ id: `brick_${s.id}`, label: `${s.label} Stein`, size: [s.size[0], s.size[1], 1], type: 'brick' })),
   // 2. STANDARD PLATES (sorted by size)
@@ -84,7 +270,109 @@ const PARTS = [
   ...SPECIAL_PARTS
 ];
 
-const PART_MAP = new Map(PARTS.map(p => [p.id, p]));
+export const PART_MAP = new Map(PARTS.map(p => [p.id, p]));
+
+const { roughnessMap, microRoughnessMap, customEnvMap } = (() => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 1024;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    // Base: Semi-glossy plastic (#11 to #22 is very shiny, #33+ is more matte)
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, 1024, 1024);
+    
+    // 1. Fine Pitting / Dust (Dots)
+    for (let i = 0; i < 20000; i++) {
+        const x = Math.random() * 1024;
+        const y = Math.random() * 1024;
+        const v = Math.floor(Math.random() * 40) + 40;
+        const size = Math.random() * 0.8 + 0.2;
+        ctx.fillStyle = `rgba(${v},${v},${v},${Math.random() * 0.4})`;
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 2. Play Wear Scratches (Irregular lines)
+    for (let i = 0; i < 3000; i++) {
+      const x = Math.random() * 1024;
+      const y = Math.random() * 1024;
+      const len = Math.random() * 15 + 2;
+      const angle = Math.random() * Math.PI * 2;
+      const v = Math.floor(Math.random() * 100) + 120; // High roughness value
+      const opacity = Math.random() * 0.3 + 0.1;
+      
+      ctx.strokeStyle = `rgba(${v},${v},${v},${opacity})`;
+      ctx.lineWidth = Math.random() * 0.8 + 0.2;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      const midX = x + Math.cos(angle) * (len * 0.5) + (Math.random() - 0.5) * 2;
+      const midY = y + Math.sin(angle) * (len * 0.5) + (Math.random() - 0.5) * 2;
+      ctx.lineTo(midX, midY);
+      ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len);
+      ctx.stroke();
+    }
+    
+    // 3. Rubbed areas / Smudges (Heavy wear patches)
+    for (let i = 0; i < 60; i++) {
+      const x = Math.random() * 1024;
+      const y = Math.random() * 1024;
+      const r = Math.random() * 30 + 10;
+      const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+      const intensity = Math.floor(Math.random() * 60) + 150;
+      grad.addColorStop(0, `rgba(${intensity}, ${intensity}, ${intensity}, 0.25)`);
+      grad.addColorStop(1, 'rgba(26, 26, 26, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  
+  const baseTex = new THREE.CanvasTexture(canvas);
+  baseTex.wrapS = baseTex.wrapT = THREE.RepeatWrapping;
+  
+  // Versions for different scales
+  const rMap = baseTex.clone();
+  rMap.repeat.set(8, 8); // Denser for baseplate
+  
+  const mMap = baseTex.clone();
+  mMap.repeat.set(1.5, 1.5); // Better for bricks/studs
+
+  // ---------------------------------------------------------
+  // Create Custom Environment Map (Blank backdrop with a "Sun")
+  // ---------------------------------------------------------
+  const envCanvas = document.createElement('canvas');
+  envCanvas.width = 1024;
+  envCanvas.height = 512;
+  const envCtx = envCanvas.getContext('2d');
+  if (envCtx) {
+    // Neutral dark environment background
+    envCtx.fillStyle = '#121212';
+    envCtx.fillRect(0, 0, 1024, 512);
+    
+    // Major light source (Simulated Sun)
+    const centerX = 512;
+    const centerY = 120;
+    const radius = 60;
+    
+    const grad = envCtx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius * 3);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(0.1, '#fff9e6'); 
+    grad.addColorStop(0.3, '#333333');
+    grad.addColorStop(1, 'rgba(12, 12, 12, 0)');
+    
+    envCtx.fillStyle = grad;
+    envCtx.beginPath();
+    envCtx.arc(centerX, centerY, radius * 3, 0, Math.PI * 2);
+    envCtx.fill();
+  }
+  const eMap = new THREE.CanvasTexture(envCanvas);
+  eMap.mapping = THREE.EquirectangularReflectionMapping;
+
+  return { roughnessMap: rMap, microRoughnessMap: mMap, customEnvMap: eMap };
+})();
 
 /**
  * Grid Snapping and Position Calculation
@@ -96,7 +384,7 @@ const PART_MAP = new Map(PARTS.map(p => [p.id, p]));
  * @param rotation - Current Y-axis rotation (0-3).
  * @returns [x, y, z] snapped world coordinates.
  */
-function getGridPos(point: THREE.Vector3, normal: THREE.Vector3, size: number[], snapToGrid: boolean, rotation: number): number[] {
+export function getGridPos(point: THREE.Vector3, normal: THREE.Vector3, size: number[], snapToGrid: boolean, rotation: number): number[] {
   // Determine actual footprint dimensions based on rotation
   const isRotated = rotation % 2 !== 0;
   const sx = isRotated ? size[1] : size[0];
@@ -146,7 +434,7 @@ const normalizePos = (p: any): number[] => {
  * Generates one or more bounding boxes for a specific part type.
  * Used for physics collision checks and stability calculations.
  */
-function getCollisionBoxes(posRaw: any, part: any, rot: number) {
+export function getCollisionBoxes(posRaw: any, part: any, rot: number) {
   const pos = normalizePos(posRaw);
   const isRot = rot % 2 !== 0;
   const sx = (isRot ? part.size[1] : part.size[0]) * 0.5;
@@ -200,7 +488,7 @@ function getCollisionBoxes(posRaw: any, part: any, rot: number) {
  * Checks for intersection between two blocks.
  * Uses Axis-Aligned Bounding Box (AABB) intersection for efficiency.
  */
-function checkCollision(posA: number[], partA: any, rotA: number, posB: number[], partB: any, rotB: number) {
+export function checkCollision(posA: number[], partA: any, rotA: number, posB: number[], partB: any, rotB: number) {
   const boxesA = getCollisionBoxes(posA, partA, rotA);
   const boxesB = getCollisionBoxes(posB, partB, rotB);
   
@@ -385,8 +673,8 @@ function useBrickGeometries() {
  * @param parts - The definition dictionary of available parts.
  * @returns { supportedIds: Set<string>, fallingIds: Set<string> }
  */
-function performStabilityCheck(blocks: any[], parts: typeof PARTS) {
-    const findPart = (id: string) => PART_MAP.get(id);
+export function performStabilityCheck(blocks: any[], parts: typeof PARTS) {
+    const getPart = (id: string) => PART_MAP.get(id);
   const EPSILON = 0.05;
 
   // Pre-calculate world-space bounding boxes for all active blocks
@@ -488,9 +776,9 @@ function performStabilityCheck(blocks: any[], parts: typeof PARTS) {
  * Component for animating a group of falling blocks.
  * Uses useFrame for direct Three.js position/rotation updates to ensure high performance.
  */
-const SceneSettings = ({ isNightMode }: { isNightMode: boolean }) => {
+const SceneSettings = ({ isNightMode, showGrid }: { isNightMode: boolean, showGrid: boolean }) => {
   const { gl, scene } = useThree();
-  const intensityTarget = isNightMode ? 0.45 : 1.0;
+  const intensityTarget = showGrid ? 0.05 : (isNightMode ? 0.45 : 1.0);
   
   useEffect(() => {
     const bgColor = isNightMode ? '#12121c' : '#f3f4f6';
@@ -609,10 +897,11 @@ const FallingGroup = React.memo(({ group, geometries, onRemove }: any) => {
             >
           <meshPhysicalMaterial 
              color={b.color} 
-             roughness={0.1} 
+             roughness={0.25} 
+             roughnessMap={microRoughnessMap}
              metalness={0.0} 
-             clearcoat={1.0} 
-             clearcoatRoughness={0.05} 
+             clearcoat={0.9} 
+             clearcoatRoughness={0.15} 
              transparent={colorMeta.isTranslucent}
              opacity={colorMeta.opacity ?? 1}
              emissive={colorMeta.isGlow ? new THREE.Color(colorMeta.emissive) : new THREE.Color(0,0,0)}
@@ -667,7 +956,8 @@ function BaseplateStuds({ isNightMode }: { isNightMode: boolean }) {
       <cylinderGeometry args={[0.15, 0.15, 0.1, 16]} />
       <meshStandardMaterial 
         color={isNightMode ? "#1a1a25" : "#d1d5db"} 
-        roughness={isNightMode ? 0.4 : 0.6} 
+        roughness={isNightMode ? 0.7 : 0.85} 
+        roughnessMap={microRoughnessMap}
       />
     </instancedMesh>
   );
@@ -677,32 +967,67 @@ function BaseplateStuds({ isNightMode }: { isNightMode: boolean }) {
  * Orchestrates the rendering of all blocks by grouping them by their part types.
  * This allows us to use one InstancedMesh per part type for maximum efficiency.
  */
-const InstancedBlocksGroup = React.memo(({ blocks, geometries, addBlock, removeBlock, updateGhost, snapToGrid, currentRotation, isDrag, currentPart }: any) => {
+const InstancedBlocksGroup = React.memo(({ 
+  blocks, geometries, addBlock, removeBlock, updateGhost, 
+  snapToGrid, currentRotation, isDrag, currentPart, pointerDownPos,
+  selectedIds, onSelect, isCtrlPressed, logicState, toggleBlockMeta, transformOffset,
+  mouseMode, currentColor, updateBlockColor
+}: any) => {
   const blocksByMaterial = useMemo(() => {
     const map = new Map<string, { partId: string, list: any[], materialProps: any }>();
     
     blocks.forEach((b: any) => {
-      const colorMeta = (COLOR_MAP.get(b.color) || { value: b.color }) as any;
-      const materialType = colorMeta.isTranslucent ? 'T' : colorMeta.isGlow ? 'G' : 'O';
-      const key = `${b.partId}_${materialType}_${b.color}`;
+      if (b.partId === 'logic_battery') return; // rendering separately
+      let colorMeta = (COLOR_MAP.get(b.color) || { value: b.color }) as any;
+      let isTranslucent = colorMeta.isTranslucent;
+      let isGlow = colorMeta.isGlow;
+      let opacity = colorMeta.opacity ?? 1;
+      let emissiveColor = colorMeta.emissive || colorMeta.isGlow ? new THREE.Color(colorMeta.emissive || b.color) : new THREE.Color(0, 0, 0);
+      let baseColor = b.color;
+      let matKeyColor = b.color;
+
+      const power = logicState[b.id] || 0;
+      const isPowered = power > 0;
+
+      let emissiveIntensity = isGlow && isPowered ? 15.0 : 0;
+
+      if (b.partId === 'logic_led') {
+         isTranslucent = true;
+         opacity = 0.8;
+         isGlow = true;
+         baseColor = b.color;
+         emissiveColor = new THREE.Color(colorMeta.emissive || b.color);
+         emissiveIntensity = isPowered ? 4.0 : 0; // Much lower so it doesn't wash out color
+      } else if (b.partId === 'logic_wire') {
+         isTranslucent = false;
+         isGlow = false;
+         opacity = 1.0;
+         emissiveColor = new THREE.Color(0, 0, 0);
+         baseColor = '#440000';
+         matKeyColor = 'wire';
+         emissiveIntensity = 0;
+      }
+
+      const materialType = isTranslucent && isGlow ? (isPowered ? 'TG_ON' : 'TG_OFF') : isTranslucent ? 'T' : isGlow ? (isPowered ? 'G_ON' : 'G_OFF') : 'O';
+      const key = `${b.partId}_${materialType}_${matKeyColor}`;
       
       if (!map.has(key)) {
         map.set(key, { 
           partId: b.partId, 
           list: [], 
           materialProps: {
-            transparent: colorMeta.isTranslucent || false,
-            opacity: colorMeta.opacity ?? 1,
-            emissive: colorMeta.emissive ? new THREE.Color(colorMeta.emissive) : new THREE.Color(0, 0, 0),
-            emissiveIntensity: colorMeta.isGlow ? 15.0 : 0,
-            color: b.color,
+            transparent: isTranslucent || false,
+            opacity: opacity,
+            emissive: emissiveColor,
+            emissiveIntensity: emissiveIntensity,
+            color: baseColor,
           }
         });
       }
       map.get(key)!.list.push(b);
     });
     return map;
-  }, [blocks]);
+  }, [blocks, logicState]);
 
   return (
     <>
@@ -720,6 +1045,16 @@ const InstancedBlocksGroup = React.memo(({ blocks, geometries, addBlock, removeB
            currentRotation={currentRotation}
            isDrag={isDrag}
            currentPart={currentPart}
+           pointerDownPos={pointerDownPos}
+           selectedIds={selectedIds}
+           onSelect={onSelect}
+           isCtrlPressed={isCtrlPressed}
+           logicState={logicState}
+           toggleBlockMeta={toggleBlockMeta}
+           transformOffset={transformOffset}
+           mouseMode={mouseMode}
+           currentColor={currentColor}
+           updateBlockColor={updateBlockColor}
         />
       ))}
     </>
@@ -786,7 +1121,29 @@ const InstancedLedMarkers = ({ blocks, geoData, color }: any) => {
    );
 };
 
-const InstancedPart = ({ partId, blocks, geometries, addBlock, removeBlock, updateGhost, snapToGrid, currentRotation, isDrag, currentPart, materialProps }: any) => {
+const InstancedPart = ({ 
+  partId, 
+  blocks, 
+  geometries, 
+  addBlock, 
+  removeBlock, 
+  updateGhost, 
+  snapToGrid, 
+  currentRotation, 
+  isDrag, 
+  currentPart, 
+  materialProps, 
+  pointerDownPos,
+  selectedIds,
+  onSelect,
+  isCtrlPressed,
+  transformOffset,
+  logicState,
+  toggleBlockMeta,
+  mouseMode,
+  currentColor,
+  updateBlockColor
+}: any) => {
   const geoData = geometries[partId] || geometries['brick_2x2'];
   const meshRef = useRef<THREE.InstancedMesh>(null);
 
@@ -796,69 +1153,187 @@ const InstancedPart = ({ partId, blocks, geometries, addBlock, removeBlock, upda
 
     const dummy = new THREE.Object3D();
     const color = new THREE.Color();
+    const highlightColor = new THREE.Color('#4dabf7'); // Light blue selection highlight
 
     blocks.forEach((b: any, i: number) => {
       const p = normalizePos(b.position);
-      dummy.position.set(p[0], p[1], p[2]);
+      const isSelected = selectedIds.includes(b.id);
+      
+      const offsetX = isSelected && transformOffset ? transformOffset[0] : 0;
+      const offsetY = isSelected && transformOffset ? transformOffset[1] : 0;
+      const offsetZ = isSelected && transformOffset ? transformOffset[2] : 0;
+
+      dummy.position.set(p[0] + offsetX, p[1] + offsetY, p[2] + offsetZ);
       dummy.rotation.set(0, b.rotation * (Math.PI / 2), 0);
       dummy.updateMatrix();
 
       mesh.setMatrixAt(i, dummy.matrix);
-      mesh.setColorAt(i, color.set(b.color));
+      
+      let blockColor = b.color;
+      if (b.partId === 'logic_wire') {
+         const power = logicState[b.id] || 0;
+         blockColor = power > 0 ? '#ff3333' : '#440000';
+      } else if (b.partId === 'logic_battery') {
+         blockColor = b.meta?.isOn ? '#33cc33' : '#cc3333';
+      }
+      
+      if (isSelected) {
+        // Blend selection color slightly
+        color.set(blockColor).lerp(highlightColor, 0.4);
+      } else {
+        color.set(blockColor);
+      }
+      mesh.setColorAt(i, color);
     });
 
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    
     mesh.computeBoundingSphere();
-  }, [blocks]);
+    if (mesh.geometry) {
+       mesh.geometry.computeBoundingBox();
+       mesh.geometry.computeBoundingSphere();
+    }
+  }, [blocks, selectedIds, transformOffset, logicState]);
+
+  useFrame(({ clock }) => {
+     if (partId === 'logic_wire' && meshRef.current) {
+        const mesh = meshRef.current;
+        const color = new THREE.Color();
+        const highlightColor = new THREE.Color('#4dabf7');
+        const t = clock.elapsedTime * 6; // pulse speed
+        const pulseAmt = (Math.sin(t) * 0.5 + 0.5) * 0.6 + 0.4; // 0.4 to 1.0
+
+        let needsUpdate = false;
+        blocks.forEach((b: any, i: number) => {
+           const power = logicState[b.id] || 0;
+           if (power > 0) {
+              const baseColor = new THREE.Color('#ff3333');
+              const dimColor = new THREE.Color('#660000');
+              color.copy(dimColor).lerp(baseColor, pulseAmt);
+              
+              const isSelected = selectedIds.includes(b.id);
+              if (isSelected) {
+                 color.lerp(highlightColor, 0.4);
+              }
+              mesh.setColorAt(i, color);
+              needsUpdate = true;
+           }
+        });
+        if (needsUpdate && mesh.instanceColor) {
+           mesh.instanceColor.needsUpdate = true;
+        }
+     }
+  });
 
   const handlePointerEvent = useCallback((e: any, type: 'move' | 'up' | 'context') => {
     e.stopPropagation();
-    if (e.instanceId === undefined) return;
     
-    const block = blocks[e.instanceId];
-    if (!block) return;
-
-    if (type === 'context') {
-      if (!isDrag(e)) removeBlock(block.id);
-      updateGhost(false);
+    if (e.instanceId === undefined && type !== 'move') {
       return;
     }
+    
+    const block = e.instanceId !== undefined ? blocks[e.instanceId] : null;
 
-    if (type === 'up' && isDrag(e)) return;
-    if (type === 'up' && (window as any)._shiftIsActive) return;
-
-    const rotAngle = block.rotation * (Math.PI / 2);
-    const n = (e.face?.normal?.clone() || new THREE.Vector3(0, 1, 0));
-    n.applyEuler(new THREE.Euler(0, rotAngle, 0));
-    const gridPos = getGridPos(e.point, n, currentPart.size, snapToGrid, currentRotation);
-
-    if (type === 'move') {
-      updateGhost(true, gridPos);
-    } else {
-      addBlock(gridPos);
+    // Calculate grid setup for ghost and building
+    let gridPos: number[] | null = null;
+    if (block) {
+      const rotAngle = block.rotation * (Math.PI / 2);
+      const n = (e.face?.normal?.clone() || new THREE.Vector3(0, 1, 0));
+      n.applyEuler(new THREE.Euler(0, rotAngle, 0));
+      gridPos = getGridPos(e.point, n, currentPart.size, snapToGrid, currentRotation);
     }
-  }, [blocks, addBlock, removeBlock, updateGhost, snapToGrid, currentRotation, currentPart, isDrag]);
+    
+    if (type === 'move') {
+       if (gridPos && (mouseMode === 'build' || isCtrlPressed.current)) {
+         const shouldShowGhost = !isCtrlPressed.current && mouseMode === 'build';
+         updateGhost(shouldShowGhost, gridPos);
+       } else {
+         updateGhost(false);
+       }
+       return;
+    }
+
+    const dragging = isDrag(e);
+    if (dragging) return;
+
+    // RIGHT CLICK
+    if (type === 'context') {
+       if (e.nativeEvent && e.nativeEvent.preventDefault) e.nativeEvent.preventDefault();
+       if (!block || dragging) return;
+       
+       if (mouseMode === 'build') {
+         if (selectedIds.includes(block.id)) {
+            selectedIds.forEach((id: string) => removeBlock(id));
+         } else {
+            removeBlock(block.id);
+         }
+         updateGhost(false);
+       } else if (mouseMode === 'select') {
+         onSelect((prev: string[]) => prev.filter((id) => id !== block.id));
+       }
+       return;
+    }
+
+    if (e.button === 2) return;
+
+    // LEFT CLICK
+    if (type === 'up' && e.button === 0) {
+       // Ctrl logic legacy fallback
+       if (isCtrlPressed.current && block) {
+         onSelect((prev: string[]) => prev.includes(block.id) ? prev.filter((id) => id !== block.id) : [...prev, block.id]);
+         return;
+       }
+
+       if (mouseMode === 'interact') {
+          if (block && block.partId === 'logic_battery') {
+             if (toggleBlockMeta) toggleBlockMeta(block.id, 'isOn');
+          }
+       } else if (mouseMode === 'select') {
+          if (block) {
+             onSelect((prev: string[]) => prev.includes(block.id) ? prev.filter((id) => id !== block.id) : [...prev, block.id]);
+          }
+       } else if (mouseMode === 'paint') {
+          if (block && updateBlockColor) {
+             updateBlockColor(block.id, currentColor);
+          }
+       } else if (mouseMode === 'build') {
+          if (gridPos && !(window as any)._shiftIsActive) {
+             addBlock(gridPos);
+          }
+       }
+    }
+  }, [blocks, addBlock, removeBlock, updateGhost, snapToGrid, currentRotation, currentPart, isDrag, selectedIds, mouseMode, currentColor, updateBlockColor, toggleBlockMeta, onSelect]);
 
   return (
     <group>
       <instancedMesh 
         ref={meshRef} 
-        args={[geoData.visual, undefined, Math.max(1, blocks.length)]} 
+        args={[geoData.visual, undefined, 2000]} 
         count={blocks.length} 
         castShadow 
         receiveShadow
+        frustumCulled={false}
         onPointerUp={(e) => handlePointerEvent(e, 'up')}
         onPointerMove={(e) => handlePointerEvent(e, 'move')}
+        onPointerDown={(e) => {
+          const cx = e.nativeEvent?.clientX ?? e.clientX ?? 0;
+          const cy = e.nativeEvent?.clientY ?? e.clientY ?? 0;
+          if (pointerDownPos) {
+            pointerDownPos.current = { x: cx, y: cy };
+          }
+          e.stopPropagation();
+        }}
         onContextMenu={(e) => handlePointerEvent(e, 'context')}
         onPointerOut={(e) => { e.stopPropagation(); updateGhost(false); }}
       >
         <meshPhysicalMaterial 
           {...materialProps}
-          roughness={0.1}
+          roughness={0.25}
+          roughnessMap={microRoughnessMap}
           metalness={0.0}
-          clearcoat={1.0}
-          clearcoatRoughness={0.05}
+          clearcoat={0.8}
+          clearcoatRoughness={0.2}
           depthWrite={!materialProps.transparent}
         />
       </instancedMesh>
@@ -869,6 +1344,84 @@ const InstancedPart = ({ partId, blocks, geometries, addBlock, removeBlock, upda
     </group>
   );
 };
+
+const BatteriesGroup = React.memo(({ blocks, geometries, selectedIds, transformOffset, toggleBlockMeta, mouseMode, onSelect, isDrag, removeBlock }: any) => {
+  const batteryBlocks = blocks.filter((b: any) => b.partId === 'logic_battery');
+  if (batteryBlocks.length === 0) return null;
+
+  return (
+    <group>
+      {batteryBlocks.map((b: any) => {
+        const isSelected = selectedIds.includes(b.id);
+        const offsetX = isSelected && transformOffset ? transformOffset[0] : 0;
+        const offsetY = isSelected && transformOffset ? transformOffset[1] : 0;
+        const offsetZ = isSelected && transformOffset ? transformOffset[2] : 0;
+        
+        const pos = normalizePos(b.position);
+        
+        return (
+          <group 
+            key={b.id} 
+            position={[pos[0] + offsetX, pos[1] + offsetY, pos[2] + offsetZ]}
+            rotation={[0, b.rotation * (Math.PI / 2), 0]}
+            onPointerUp={(e) => {
+              e.stopPropagation();
+              if (isDrag(e)) return;
+              if (e.button === 2 && removeBlock) {
+                 removeBlock(b.id);
+                 return;
+              }
+              if (mouseMode === 'interact') {
+                toggleBlockMeta(b.id, 'isOn');
+              } else if (mouseMode === 'select') {
+                onSelect((prev: string[]) => prev.includes(b.id) ? prev.filter((id) => id !== b.id) : [...prev, b.id]);
+              }
+            }}
+            onPointerEnter={(e) => {
+              e.stopPropagation();
+              document.body.style.cursor = 'pointer';
+            }}
+            onPointerLeave={(e) => {
+              e.stopPropagation();
+              document.body.style.cursor = 'auto';
+            }}
+          >
+            {/* Base (Bottom 2/3) - Black */}
+            <mesh position={[0, -0.166, 0]} castShadow>
+              <boxGeometry args={[1, 0.666, 1]} />
+              <meshStandardMaterial color="#111111" roughness={0.4} metalness={0.8} />
+            </mesh>
+            
+            {/* Top (Top 1/3) - Copper */}
+            <mesh position={[0, 0.333, 0]} castShadow>
+              <boxGeometry args={[1, 0.334, 1]} />
+              <meshStandardMaterial color="#c88246" roughness={0.3} metalness={0.9} />
+            </mesh>
+
+            {/* Studs if desired - Copper */}
+            <group position={[0, 0.5, 0]}>
+               { [[0.25, 0.25], [-0.25, 0.25], [0.25, -0.25], [-0.25, -0.25]].map((studPos, i) => (
+                  <mesh key={i} position={[studPos[0], 0.1, studPos[1]]} castShadow>
+                    <cylinderGeometry args={[0.15, 0.15, 0.2, 16]} />
+                    <meshStandardMaterial color="#c88246" roughness={0.3} metalness={0.9} />
+                  </mesh>
+               ))}
+               <mesh position={[0, 0.05, 0]}>
+                 <cylinderGeometry args={[0.08, 0.08, 0.11, 16]} />
+                 <meshStandardMaterial 
+                   color={b.meta?.isOn ? "#33ff33" : "#444444"} 
+                   emissive={b.meta?.isOn ? "#33ff33" : "#000000"} 
+                   emissiveIntensity={b.meta?.isOn ? 5 : 0} 
+                 />
+               </mesh>
+            </group>
+            {isSelected && <mesh position={[0,0,0]}><boxGeometry args={[1.02, 1.02, 1.02]} /><meshBasicMaterial color="#4dabf7" wireframe transparent opacity={0.6} /></mesh>}
+          </group>
+        );
+      })}
+    </group>
+  );
+});
 
 export default function App() {
   const [blocks, setBlocks] = useState<any[]>([]);
@@ -900,19 +1453,220 @@ export default function App() {
   /**
    * Loads a complete pre-defined template into the workspace.
    */
-  const loadTemplate = useCallback((template: any) => {
-    const newBlocks = template.blocks.map((b: any, index: number) => ({
-      ...b,
-      id: `template-${template.id}-${index}-${Date.now()}`
-    }));
-    updateBlocks(newBlocks);
-    setSimulationMessage({ text: `${template.name} geladen!`, type: 'success' });
-    setTimeout(() => setSimulationMessage(null), 3000);
-  }, [updateBlocks]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const isAltPressed = useRef(false);
+  const isCtrlPressed = useRef(false);
 
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Control' || e.key === 'Meta') {
+        isCtrlPressed.current = true;
+      }
+      if (e.key === 'Alt') {
+        isAltPressed.current = true;
+      }
+    };
+    const handleGlobalKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Control' || e.key === 'Meta') {
+        isCtrlPressed.current = false;
+      }
+      if (e.key === 'Alt') {
+        isAltPressed.current = false;
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    window.addEventListener('keyup', handleGlobalKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown);
+      window.removeEventListener('keyup', handleGlobalKeyUp);
+    };
+  }, []);
+
+  const parseSaveFile = useCallback((content: string) => {
+    const lines = content.split('\n');
+    const newBlocks: any[] = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('=') || trimmed.startsWith('-') || trimmed.startsWith('PART-ID') || trimmed.startsWith('BRICKCRAFT')) continue;
+      const parts = trimmed.split(/\s+/);
+      if (parts.length >= 6) {
+        const px = parseFloat(parts[1]);
+        const py = parseFloat(parts[2]);
+        const pz = parseFloat(parts[3]);
+        const rot = parseInt(parts[4], 10);
+        const color = parts[5];
+        if (isNaN(px) || isNaN(py) || isNaN(pz)) continue;
+        newBlocks.push({
+          id: Math.random().toString(36).substring(2, 9),
+          partId: parts[0],
+          position: [px / 2 - 32, py - 0.5, pz / 2 - 32], 
+          rotation: isNaN(rot) ? 0 : rot,
+          color: color
+        });
+      }
+    }
+    return newBlocks;
+  }, []);
+
+  const onSelect = useCallback((id: string) => {
+    setSelectedIds(prev => {
+      if (prev.includes(id)) {
+        return prev.filter(x => x !== id);
+      }
+      return [...prev, id];
+    });
+  }, []);
+
+  const duplicateSelection = useCallback(() => {
+    if (selectedIds.length === 0) return;
+    const selectedBlocks = blocks.filter(b => selectedIds.includes(b.id));
+    const newBlocksToAdd = selectedBlocks.map(b => ({
+      ...b,
+      id: Math.random().toString(36).substring(2, 9),
+      position: [b.position[0], b.position[1] + 1, b.position[2]] // Shift up
+    }));
+    updateBlocks([...blocks, ...newBlocksToAdd]);
+    setSelectedIds(newBlocksToAdd.map(b => b.id));
+    setSimulationMessage({ text: `${newBlocksToAdd.length} Steine dupliziert`, type: 'success' });
+    setTimeout(() => setSimulationMessage(null), 3000);
+  }, [selectedIds, blocks, updateBlocks]);
+
+  const loadTemplate = useCallback(async (template: any) => {
+    try {
+      const response = await fetch(template.path);
+      const text = await response.text();
+      const newBlocks = parseSaveFile(text).map((b, i) => ({
+        ...b,
+        id: `template-${template.id}-${i}-${Date.now()}`
+      }));
+      if (newBlocks.length > 0) {
+        updateBlocks(newBlocks);
+        setSimulationMessage({ text: `${template.name} geladen!`, type: 'success' });
+        setTimeout(() => setSimulationMessage(null), 3000);
+      }
+    } catch (err) {
+      console.error("Failed to load template file:", err);
+    }
+  }, [updateBlocks, parseSaveFile]);
+
+  const [transformOffset, setTransformOffset] = useState<[number, number, number] | null>(null);
+  const [isTransforming, setIsTransforming] = useState(false);
+  const transformDummyRef = useRef<THREE.Group>(null);
+  const initialPositionsRef = useRef<Record<string, number[]>>({});
+
+  useEffect(() => {
+    if (selectedIds.length > 0 && transformDummyRef.current && !isTransforming) {
+      const selectedBlocks = blocksRef.current.filter(b => selectedIds.includes(b.id));
+      if (selectedBlocks.length > 0) {
+        let cx = 0, cy = 0, cz = 0;
+        selectedBlocks.forEach(b => {
+          cx += b.position[0];
+          cy += b.position[1];
+          cz += b.position[2];
+        });
+        cx /= selectedBlocks.length;
+        cy /= selectedBlocks.length;
+        cz /= selectedBlocks.length;
+        transformDummyRef.current.position.set(cx, cy, cz);
+        transformDummyRef.current.userData.initialPosition = [cx, cy, cz];
+      }
+    }
+  }, [selectedIds, isTransforming]);
+
+  const [mouseMode, setMouseMode] = useState<'interact' | 'select' | 'build' | 'paint'>('interact');
   const [currentColor, setCurrentColor] = useState(COLORS[0].value);
   const [currentPartId, setCurrentPartId] = useState('brick_2x2');
   const [isPlate, setIsPlate] = useState(false);
+
+  const [logicState, setLogicState] = useState<Record<string, number>>({});
+  
+  const activeGlowBlocks = useMemo(() => {
+     return blocks.filter((b: any) => {
+         if (b.partId === 'logic_led') return logicState[b.id] > 0;
+         if (b.partId === 'logic_wire' || b.partId === 'logic_battery') return false;
+         return COLOR_MAP.get(b.color)?.isGlow;
+     }).slice(0, 30);
+  }, [blocks, logicState]);
+
+  useEffect(() => {
+    const logicBlocks = blocks.filter(b => b.partId.startsWith('logic_'));
+    const nextState: Record<string, number> = {};
+    
+    // Batteries that are active get full power (15)
+    logicBlocks.forEach(b => {
+      if (b.partId === 'logic_battery' && b.meta?.isOn) {
+        nextState[b.id] = 15;
+      }
+    });
+
+    let queue = logicBlocks.filter(b => nextState[b.id] === 15);
+    
+    while(queue.length > 0) {
+      const current = queue.shift();
+      if (!current) continue;
+      const currentPower = nextState[current.id];
+      if (currentPower <= 1) continue;
+      
+      logicBlocks.forEach(neighbor => {
+        if (neighbor.id === current.id || neighbor.partId === 'logic_battery') return;
+        
+        const cPart = PART_MAP.get(current.partId);
+        const nPart = PART_MAP.get(neighbor.partId);
+        if (!cPart || !nPart) return;
+
+        const cxSize = (current.rotation % 2 === 1 ? cPart.size[1] : cPart.size[0]) * 0.5;
+        const czSize = (current.rotation % 2 === 1 ? cPart.size[0] : cPart.size[1]) * 0.5;
+        const nxSize = (neighbor.rotation % 2 === 1 ? nPart.size[1] : nPart.size[0]) * 0.5;
+        const nzSize = (neighbor.rotation % 2 === 1 ? nPart.size[0] : nPart.size[1]) * 0.5;
+        
+        const dx = Math.abs(neighbor.position[0] - current.position[0]);
+        const dz = Math.abs(neighbor.position[2] - current.position[2]);
+        const dy = Math.abs(neighbor.position[1] - current.position[1]);
+        
+        // Touch condition with tolerance for grid misalignment
+        const dxMax = (cxSize + nxSize) / 2 + 0.2;
+        const dzMax = (czSize + nzSize) / 2 + 0.2;
+
+        const touchX = dx <= dxMax;
+        const touchZ = dz <= dzMax;
+        
+        // Check if it's purely diagonal (touching only on the corner)
+        // If dx is close to dxMax AND dz is close to dzMax, it's diagonal.
+        const isDiagonal = dx > dxMax - 0.35 && dz > dzMax - 0.35;
+        
+        let isValidTouch = touchX && touchZ && !isDiagonal;
+        if (current.partId === 'logic_battery' || neighbor.partId === 'logic_battery') {
+           isValidTouch = touchX && touchZ; // Allows diagonal "schräg dazu" for battery
+        }
+        
+        // Height check - must basically touch on Y
+        const touchY = dy <= (cPart.size[2] + nPart.size[2]) / 2 + 0.1;
+        
+        if (isValidTouch && touchY) {
+          if (!nextState[neighbor.id] || nextState[neighbor.id] < currentPower - 1) {
+            nextState[neighbor.id] = currentPower - 1;
+            queue.push(neighbor);
+          }
+        }
+      });
+    }
+
+    setLogicState(prev => {
+      // Deep compare to prevent infinite re-renders or unnecessary updates
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(nextState);
+      if (prevKeys.length !== nextKeys.length) return nextState;
+      let changed = false;
+      for (const k of nextKeys) {
+        if (prev[k] !== nextState[k]) {
+          changed = true;
+          break;
+        }
+      }
+      return changed ? nextState : prev;
+    });
+
+  }, [blocks]);
   const [currentRotation, setCurrentRotation] = useState(0);
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [isValidPlacement, setIsValidPlacement] = useState(true);
@@ -926,7 +1680,45 @@ export default function App() {
   const [gravityStrength, setGravityStrength] = useState(9.8);
   const [gravityMode, setGravityMode] = useState<'up' | 'explosion'>('up');
   const [fallingGroups, setFallingGroups] = useState<any[]>([]);
-  const [sidebarTab, setSidebarTab] = useState<'katalog' | 'vorlagen' | 'ki' | 'werkzeug'>('katalog');
+  const [sidebarTab, setSidebarTab] = useState<'katalog' | 'vorlagen' | 'ki' | 'werkzeug' | 'info' | 'logic'>('katalog');
+  const [sfxEnabled, setSfxEnabled] = useState(true);
+  const [ambientEnabled, setAmbientEnabled] = useState(false);
+  const [musicEnabled, setMusicEnabled] = useState(false);
+  const [isAudioReady, setIsAudioReady] = useState(false);
+
+  useEffect(() => {
+    if (AudioEngine.isInitialized) {
+      AudioEngine.setSfxVolume(sfxEnabled ? 1 : 0);
+    }
+  }, [sfxEnabled, isAudioReady]);
+
+  useEffect(() => {
+    if (AudioEngine.isInitialized) {
+      AudioEngine.setAmbientVolume(ambientEnabled ? 1.0 : 0);
+    }
+  }, [ambientEnabled, isAudioReady]);
+
+  useEffect(() => {
+    if (AudioEngine.isInitialized) {
+      AudioEngine.setMusicVolume(musicEnabled ? 0.5 : 0);
+    }
+  }, [musicEnabled, isAudioReady]);
+
+  useEffect(() => {
+    const handleInteraction = () => {
+      if (!isAudioReady) {
+        AudioEngine.init();
+        setIsAudioReady(true);
+      }
+    };
+    window.addEventListener('click', handleInteraction);
+    window.addEventListener('keydown', handleInteraction);
+    return () => {
+      window.removeEventListener('click', handleInteraction);
+      window.removeEventListener('keydown', handleInteraction);
+    };
+  }, [isAudioReady]);
+
   const [isNightMode, setIsNightMode] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeCategory, setActiveCategory] = useState<'All' | 'Brick' | 'Plate' | 'Tile' | 'Round' | 'Special'>('All');
@@ -939,6 +1731,9 @@ export default function App() {
 
   const filteredParts = useMemo(() => {
     return PARTS.filter(p => {
+      const isLogic = p.id.startsWith('logic_');
+      if (isLogic && sidebarTab !== 'logic') return false;
+
       const matchesSearch = p.label.toLowerCase().includes(searchTerm.toLowerCase());
       if (!matchesSearch) return false;
       
@@ -951,7 +1746,7 @@ export default function App() {
       
       return false;
     });
-  }, [searchTerm, activeCategory]);
+  }, [searchTerm, activeCategory, sidebarTab]);
 
   const handlePhysicsCheck = useCallback(() => {
     const { supportedIds, fallingIds } = performStabilityCheck(blocks, PARTS);
@@ -1018,12 +1813,13 @@ export default function App() {
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
 
   const isDrag = useCallback((e: any) => {
-    // Determine pointer coordinates regardless of synthetic or native DOM event
-    const cx = e.clientX ?? e.touches?.[0]?.clientX ?? 0;
-    const cy = e.clientY ?? e.touches?.[0]?.clientY ?? 0;
+    const cx = e.nativeEvent?.clientX ?? e.clientX ?? e.touches?.[0]?.clientX ?? 0;
+    const cy = e.nativeEvent?.clientY ?? e.clientY ?? e.touches?.[0]?.clientY ?? 0;
     const dx = cx - pointerDownPos.current.x;
     const dy = cy - pointerDownPos.current.y;
-    return Math.sqrt(dx*dx + dy*dy) > 5;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const dragging = dist > 8;
+    return dragging;
   }, []);
 
   const geometries = useBrickGeometries();
@@ -1126,8 +1922,9 @@ export default function App() {
       return checkCollision(pos, currentPart, currentRotation, b.position, bPart, b.rotation);
     });
 
-    if (inBounds && !hasCollision && pos[1] >= -0.45) {
-      updateBlocks([...blocks, {
+      if (inBounds && !hasCollision && pos[1] >= -0.45) {
+        AudioEngine.playClick();
+        updateBlocks([...blocks, {
         id: Math.random().toString(36).substring(2, 9),
         position: pos,
         color: currentColor,
@@ -1138,8 +1935,57 @@ export default function App() {
   };
 
   const removeBlock = (id: string) => {
-    updateBlocks(blocks.filter(b => b.id !== id));
+    AudioEngine.playPop();
+    setBlocks(prev => {
+      const next = prev.filter(b => b.id !== id);
+      
+      // Update history
+      const newHistory = historyRef.current.slice(0, historyIndexRef.current + 1);
+      newHistory.push(next);
+      historyRef.current = newHistory;
+      historyIndexRef.current = newHistory.length - 1;
+      
+      return next;
+    });
   };
+
+  const updateBlockColor = useCallback((id: string, color: string) => {
+    AudioEngine.playClick();
+    setBlocks(prev => {
+      const next = prev.map(b => b.id === id ? { ...b, color } : b);
+      const newHistory = historyRef.current.slice(0, historyIndexRef.current + 1);
+      newHistory.push(next);
+      historyRef.current = newHistory;
+      historyIndexRef.current = newHistory.length - 1;
+      return next;
+    });
+  }, []);
+
+  const toggleBlockMeta = useCallback((id: string, key: string) => {
+    AudioEngine.playClick();
+    setBlocks(prev => {
+      const next = prev.map(b => {
+        if (b.id === id) {
+          return {
+            ...b,
+            meta: {
+              ...(b.meta || {}),
+              [key]: !(b.meta?.[key])
+            }
+          };
+        }
+        return b;
+      });
+      // Skip history push for this to avoid cluttering history with toggle states?
+      // actually let's push it so undo works on toggles
+      const newHistory = historyRef.current.slice(0, historyIndexRef.current + 1);
+      newHistory.push(next);
+      historyRef.current = newHistory;
+      historyIndexRef.current = newHistory.length - 1;
+      
+      return next;
+    });
+  }, []);
 
   /**
    * Serializes current world state into a plain text file.
@@ -1186,33 +2032,7 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (readerEvent) => {
        const content = readerEvent.target?.result as string;
-       const lines = content.split('\n');
-       const newBlocks: any[] = [];
-       for (const line of lines) {
-         const trimmed = line.trim();
-         // Filter out headers, dividers, and empty lines
-         if (!trimmed || trimmed.startsWith('=') || trimmed.startsWith('-') || trimmed.startsWith('PART-ID') || trimmed.startsWith('BRICKCRAFT')) continue;
-         
-         const parts = trimmed.split(/\s+/);
-         if (parts.length >= 6) {
-            const px = parseFloat(parts[1]);
-            const py = parseFloat(parts[2]);
-            const pz = parseFloat(parts[3]);
-            const rot = parseInt(parts[4], 10);
-            const color = parts[5];
-            
-            // Skip entries with invalid coordinate data (NaN protection)
-            if (isNaN(px) || isNaN(py) || isNaN(pz)) continue;
-            
-            newBlocks.push({
-              id: Math.random().toString(36).substring(2, 9),
-              partId: parts[0],
-              position: [px / 2 - 32, py - 0.5, pz / 2 - 32], 
-              rotation: isNaN(rot) ? 0 : rot,
-              color: color
-            });
-         }
-       }
+       const newBlocks = parseSaveFile(content);
        if (newBlocks.length > 0) {
           updateBlocks(newBlocks);
           setSimulationMessage({ text: `${newBlocks.length} Steine erfolgreich geladen`, type: 'success' });
@@ -1378,91 +2198,74 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
   }, [updateGhost, currentPartId]);
 
   return (
-    <div className="flex flex-col w-screen h-screen overflow-hidden bg-[#e5e7eb] font-sans text-[#1f2937]" onContextMenu={(e) => e.preventDefault()}>
+    <div className={`flex flex-col w-screen h-screen overflow-hidden bg-[#f3f4f6] font-sans text-[#1f2937] ${isCtrlPressed.current ? 'cursor-crosshair' : ''}`} onContextMenu={(e) => e.preventDefault()}>
       
-      {/* --- Main Navigation / Header --- */}
-      <header className="h-[64px] bg-white border-b border-[#d1d5db] flex items-center px-6 justify-between z-10 shrink-0">
-        <div className="font-extrabold text-[1.25rem] tracking-tight flex items-center gap-2">
-           BRICK<span className="text-[#2563eb]">CRAFT</span>
+      <header className="h-[56px] bg-white border-b border-gray-200 flex items-center px-6 justify-between z-20 shrink-0 shadow-sm">
+        <div className="flex items-center gap-6">
+          <div className="font-black text-[1.1rem] tracking-tighter flex items-center gap-1.5 group cursor-default">
+            <span className="w-6 h-6 bg-blue-600 rounded flex items-center justify-center text-white text-[10px] rotate-[-10deg] group-hover:rotate-0 transition-transform shadow-lg shadow-blue-200">B</span>
+             BRICK<span className="text-blue-600">CRAFT</span>
+          </div>
+
+          <nav className="hidden lg:flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
+             {[
+               { id: 'katalog', label: 'Bausteine', icon: Search },
+               { id: 'logic', label: 'Logik', icon: Zap },
+               { id: 'vorlagen', label: 'Library', icon: Info },
+               { id: 'ki', label: 'AI Builder', icon: Wind },
+               { id: 'werkzeug', label: 'Settings', icon: Volume2 },
+             ].map((tab) => (
+                <button 
+                   key={tab.id}
+                   onClick={() => setSidebarTab(tab.id as any)}
+                   className={`flex items-center gap-2 px-4 py-1.5 text-[10px] font-black rounded-lg transition-all uppercase tracking-tight ${sidebarTab === tab.id ? 'bg-white shadow-md text-blue-600 outline-none' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                   <tab.icon size={12} />
+                   {tab.label}
+                </button>
+             ))}
+          </nav>
         </div>
-        <div className="flex gap-3">
+
+        <div className="flex items-center gap-4">
+          <div className="flex bg-gray-100 p-1 rounded-xl">
+             <button onClick={undo} title="Undo (Ctrl+Z)" className="p-2 hover:bg-white hover:shadow-sm rounded-lg text-gray-500 transition-all active:scale-90"><ChevronUp size={16} className="-rotate-90" /></button>
+             <button onClick={redo} title="Redo (Ctrl+Y)" className="p-2 hover:bg-white hover:shadow-sm rounded-lg text-gray-500 transition-all active:scale-90"><ChevronUp size={16} className="rotate-90" /></button>
+          </div>
+          
+          <div className="h-6 w-[1px] bg-gray-200" />
+
           <button 
-             onClick={undo}
-             title="Rückgängig machen (Ctrl+Z)"
-             className="px-4 py-2 rounded-md border border-[#d1d5db] bg-white text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
+             onClick={handleSave}
+             className="px-4 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-xl shadow-blue-100 active:scale-95 flex items-center gap-2"
           >
-            Undo
-          </button>
-          <button 
-             onClick={redo}
-             title="Wiederholen (Ctrl+Y)"
-             className="px-4 py-2 rounded-md border border-[#d1d5db] bg-white text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
-          >
-            Redo
-          </button>
-          <button 
-             onClick={() => setCurrentRotation(r => (r + 1) % 4)} 
-             className="px-4 py-2 rounded-md border border-[#d1d5db] bg-white text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
-          >
-            Drehen (R)
-          </button>
-          <button 
-             onClick={() => updateBlocks([])} 
-             className="px-4 py-2 rounded-md border border-[#d1d5db] bg-white text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
-          >
-            Alle löschen
+             Export <ExternalLink size={12} />
           </button>
         </div>
       </header>
 
-      {/* --- Central Editor Area --- */}
-      <main className="flex-1 flex relative overflow-hidden">
+      <main className="flex-1 flex relative overflow-hidden bg-gray-50">
         
-        {/* Left Sidebar: Controls and Brick Palette */}
-        <aside className="w-[300px] bg-white border-r border-[#d1d5db] flex flex-col shrink-0 z-10 overflow-hidden shadow-xl">
-          
-          <div className="p-5 border-b border-gray-100 bg-gray-50/30">
-            <div className="flex items-center gap-2 mb-4">
-               <div className="w-8 h-8 bg-[#2563eb] rounded-lg flex items-center justify-center text-white font-black lg shadow-sm">B</div>
-               <h1 className="text-lg font-black text-[#111827] tracking-tighter uppercase">Brickcraft</h1>
-            </div>
-
-            <div className="flex bg-gray-100 p-1 rounded-lg">
-               {[
-                 { id: 'katalog', label: 'Bausatz' },
-                 { id: 'vorlagen', label: 'Vorlagen' },
-                 { id: 'ki', label: 'KI' },
-                 { id: 'werkzeug', label: 'Werkzeug' }
-               ].map((tab) => (
-                  <button 
-                     key={tab.id}
-                     onClick={() => setSidebarTab(tab.id as any)}
-                     className={`flex-1 py-1.5 text-[10px] font-bold rounded-md transition-all uppercase tracking-tighter ${sidebarTab === tab.id ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                  >
-                     {tab.label}
-                  </button>
-               ))}
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-5 custom-scrollbar space-y-8">
+        {/* Left Sidebar (Minimal) */}
+        <aside className="w-[320px] bg-white border-r border-gray-200 flex flex-col shrink-0 z-10 overflow-hidden shadow-2xl shadow-gray-200/50">
+          <div className="flex-1 overflow-y-auto p-6 space-y-10 custom-scrollbar">
             
             {sidebarTab === 'katalog' && (
-              <div className="animate-in fade-in slide-in-from-left-2 duration-300">
-                <section className="mb-8">
-                   <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-4 flex items-center gap-2">
-                     <span className="w-4 h-[1px] bg-gray-200" /> Ausgewählte Farbe
-                   </h3>
-                   <div className="flex flex-wrap gap-2.5">
-                     {COLORS.map(c => (
+              <div className="space-y-10 animate-in fade-in slide-in-from-left-2 duration-500">
+                <section>
+                   <div className="flex items-center justify-between mb-4 px-1">
+                      <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400">Palette</h3>
+                      <div 
+                        className="w-4 h-4 rounded-full border-2 border-white shadow-xl" 
+                        style={{ backgroundColor: currentColor, boxShadow: `0 0 10px ${currentColor}44` }} 
+                      />
+                   </div>
+                   <div className="grid grid-cols-6 gap-2 bg-gray-50 p-3 rounded-2xl border border-gray-100">
+                     {COLORS.filter(c => !c.isGlow).map(c => (
                        <button
                          key={c.value}
-                         className="w-6 h-6 rounded-full cursor-pointer transition-all hover:scale-110 active:scale-95 shadow-sm"
-                         style={{ 
-                           backgroundColor: c.value,
-                           border: currentColor === c.value ? '2px solid white' : (c.value === '#FFFFFF' ? '1px solid #e5e7eb' : 'none'),
-                           boxShadow: currentColor === c.value ? '0 0 0 2px #2563eb' : '0 1px 2px rgba(0,0,0,0.1)'
-                         }}
+                         className={`w-full aspect-square rounded-lg cursor-pointer transition-all hover:scale-110 active:scale-90 shadow-sm ${currentColor === c.value ? 'scale-110 ring-2 ring-blue-500 ring-offset-2 z-10 shadow-lg' : ''}`}
+                         style={{ backgroundColor: c.value }}
                          onClick={() => setCurrentColor(c.value)}
                          title={c.name}
                        />
@@ -1471,108 +2274,224 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                 </section>
 
                 <section>
-                   <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-4 flex items-center gap-2">
-                     <span className="w-4 h-[1px] bg-gray-200" /> Bauteile
-                   </h3>
-                   
-                   <div className="relative mb-3">
-                      <input 
-                         type="text" 
-                         placeholder="Suchen..."
-                         value={searchTerm}
-                         onChange={(e) => setSearchTerm(e.target.value)}
-                         className="w-full pl-8 pr-3 py-2 border border-gray-100 bg-gray-50 rounded-lg text-xs outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-300 transition-all"
-                      />
-                      <span className="absolute left-3 top-2.5 opacity-30 text-[10px]">🔍</span>
+                   <div className="space-y-4 mb-6 px-1">
+                      <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400">Bricks</h3>
+                      <div className="relative">
+                         <input 
+                            type="text" 
+                            placeholder="Find unique part..."
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-100 rounded-2xl text-xs font-bold outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-300 transition-all placeholder:text-gray-300"
+                         />
+                         <Search size={16} className="absolute left-3.5 top-3.5 text-gray-400 opacity-50" />
+                      </div>
+                      <div className="flex flex-wrap gap-1 bg-gray-50 p-1 rounded-xl">
+                         {['All', 'Brick', 'Plate', 'Tile', 'Round', 'Special'].map((cat: any) => (
+                            <button 
+                               key={cat}
+                               onClick={() => setActiveCategory(cat)}
+                               className={`flex-1 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-tight transition-all ${activeCategory === cat ? 'bg-white shadow-md text-blue-600' : 'text-gray-400 hover:text-gray-600 hover:bg-white/50'}`}
+                            >
+                               {cat}
+                            </button>
+                         ))}
+                      </div>
                    </div>
 
-                   <div className="flex flex-wrap gap-1 mb-4 overflow-x-auto pb-1 no-scrollbar">
-                      {['All', 'Brick', 'Plate', 'Tile', 'Round', 'Special'].map((cat: any) => (
-                         <button 
-                            key={cat}
-                            onClick={() => setActiveCategory(cat)}
-                            className={`px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-wider transition-all whitespace-nowrap border ${activeCategory === cat ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-100' : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'}`}
-                         >
-                            {cat === 'Brick' ? 'Steine' : cat === 'Plate' ? 'Platten' : cat === 'Tile' ? 'Fliesen' : cat === 'Round' ? 'Rund' : cat === 'Special' ? 'Spezial' : 'Alle'}
-                         </button>
-                      ))}
-                   </div>
-
-                   <div className="grid grid-cols-2 gap-2">
+                   <div className="grid grid-cols-2 gap-3">
                       {filteredParts.map(p => (
-                         <div 
+                         <button 
                             key={p.id}
-                            onClick={() => setCurrentPartId(p.id)}
-                            className={`group relative border rounded-xl p-3 flex flex-col items-center justify-center gap-1 cursor-pointer transition-all hover:shadow-md ${currentPartId === p.id ? 'border-blue-500 bg-blue-50/50 ring-1 ring-blue-500 shadow-sm' : 'border-gray-100 bg-white hover:border-blue-200'}`}
+                            onClick={() => {
+                              setCurrentPartId(p.id);
+                              if (sfxEnabled) AudioEngine.playClick();
+                            }}
+                            className={`group flex flex-col items-center gap-3 p-4 border rounded-3xl transition-all duration-500
+                              ${currentPartId === p.id 
+                                ? 'border-blue-600 bg-blue-50/30 shadow-xl shadow-blue-900/5 ring-1 ring-blue-600 scale-[1.02]' 
+                                : 'border-gray-100 bg-white hover:border-blue-200 hover:bg-blue-50/10'}`}
                          >
-                            <span className={`text-[10px] font-bold text-center leading-tight transition-colors ${currentPartId === p.id ? 'text-blue-700' : 'text-gray-700 group-hover:text-blue-600'}`}>{p.label}</span>
-                            <span className="text-[8px] font-mono font-bold text-gray-300 uppercase tracking-widest">{p.id.split('_').slice(1).join(' ')}</span>
-                            {currentPartId === p.id && (
-                              <div className="absolute top-1 right-2 w-1.5 h-1.5 bg-blue-500 rounded-full" />
-                            )}
-                         </div>
+                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-300 ${currentPartId === p.id ? 'bg-blue-600 text-white shadow-xl' : 'bg-gray-50 text-gray-300 group-hover:bg-blue-100 group-hover:text-blue-500'}`}>
+                               <p className="text-[10px] font-black">{p.size.join('x')}</p>
+                            </div>
+                            <div className="text-center">
+                               <p className={`text-[10px] font-black leading-none uppercase tracking-tighter ${currentPartId === p.id ? 'text-blue-700' : 'text-gray-800'}`}>
+                                  {p.label}
+                               </p>
+                               <span className="text-[7px] font-bold text-gray-300 uppercase tracking-widest mt-1 block">ID: {p.id.split('_').pop()}</span>
+                            </div>
+                         </button>
                       ))}
                    </div>
                 </section>
               </div>
             )}
 
+            {sidebarTab === 'logic' && (
+              <div className="space-y-6 animate-in fade-in slide-in-from-left-2 duration-500">
+                 <section>
+                   <div className="space-y-4 mb-6 px-1">
+                      <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400">Logik Bausteine</h3>
+                      <p className="text-xs text-gray-500">Logiksteine funktionieren wie Redstone. Kabel verbinden Komponenten, die Batterie liefert Strom und LEDs leuchten wenn sie Strom erhalten. Klicke (mit Interaktionswerkzeug) auf die Batterie, um sie ein- oder auszuschalten.</p>
+                   </div>
+                   <div className="grid grid-cols-2 gap-3">
+                      {['logic_battery', 'logic_wire', 'logic_led'].map(partId => {
+                         const p = PARTS.find(part => part.id === partId);
+                         if (!p) return null;
+                         return (
+                          <button 
+                             key={p.id}
+                             onClick={() => {
+                               setCurrentPartId(p.id);
+                               if (sfxEnabled) AudioEngine.playClick();
+                             }}
+                             className={`group flex flex-col items-center gap-3 p-4 border rounded-3xl transition-all duration-500
+                               ${currentPartId === p.id 
+                                 ? 'border-blue-600 bg-blue-50/30 shadow-xl shadow-blue-900/5 ring-1 ring-blue-600 scale-[1.02]' 
+                                 : 'border-gray-100 bg-white hover:border-blue-200 hover:bg-blue-50/10'}`}
+                          >
+                             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-300 ${currentPartId === p.id ? 'bg-blue-600 text-white shadow-xl' : 'bg-gray-50 text-gray-300 group-hover:bg-blue-100 group-hover:text-blue-500'}`}>
+                                <Zap size={20} />
+                             </div>
+                             <div className="text-center">
+                                <p className={`text-[10px] font-black leading-none uppercase tracking-tighter ${currentPartId === p.id ? 'text-blue-700' : 'text-gray-800'}`}>
+                                   {p.label}
+                                </p>
+                             </div>
+                          </button>
+                         )
+                      })}
+                   </div>
+                   <div className="space-y-4 mb-6 mt-6 px-1">
+                      <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400">Leuchtfarben</h3>
+                      <div className="grid grid-cols-4 gap-2 bg-gray-50 p-3 rounded-2xl border border-gray-100">
+                        {COLORS.filter(c => c.isGlow).map(c => (
+                          <button
+                            key={c.value}
+                            className={`w-full aspect-square rounded-lg cursor-pointer transition-all hover:scale-110 active:scale-90 shadow-sm ${currentColor === c.value ? 'scale-110 ring-2 ring-blue-500 ring-offset-2 z-10 shadow-lg' : ''}`}
+                            style={{ backgroundColor: c.value }}
+                            onClick={() => setCurrentColor(c.value)}
+                            title={c.name}
+                          />
+                        ))}
+                      </div>
+                   </div>
+                 </section>
+              </div>
+            )}
+
             {sidebarTab === 'vorlagen' && (
-              <div className="animate-in fade-in slide-in-from-left-2 duration-300">
-                <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-6 flex items-center gap-2">
-                   <span className="w-4 h-[1px] bg-gray-200" /> Bauvorlagen
-                </h3>
-                <div className="grid grid-cols-1 gap-3">
+              <div className="space-y-6 animate-in fade-in duration-500">
+                <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400 px-1">Library</h3>
+                <div className="grid grid-cols-1 gap-4">
                    {TEMPLATES.map(t => (
-                      <div 
+                      <button 
                          key={t.id}
                          onClick={() => loadTemplate(t)}
-                         className="border border-gray-100 rounded-2xl p-5 flex flex-col gap-2 cursor-pointer transition-all bg-white hover:shadow-xl hover:border-blue-100 hover:-translate-y-0.5 group active:scale-[0.98]"
+                         className="group relative h-32 w-full rounded-3xl overflow-hidden border border-gray-100 text-left bg-white hover:shadow-2xl hover:border-blue-400 transition-all active:scale-95"
                       >
-                         <div className="flex justify-between items-start">
-                            <span className="text-[13px] font-black text-gray-800 tracking-tight leading-none">{t.name}</span>
-                            <div className="w-6 h-6 rounded-full bg-blue-50 flex items-center justify-center text-blue-500 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">→</div>
+                         <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent group-hover:from-blue-500/10 transition-colors" />
+                         <div className="relative p-6 h-full flex flex-col justify-end">
+                            <span className="text-xs font-black text-gray-900 uppercase tracking-tighter mb-1 block group-hover:translate-x-1 transition-transform">{t.name}</span>
+                            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tight opacity-100 group-hover:opacity-60">{t.description}</p>
                          </div>
-                         <p className="text-[10px] text-gray-400 leading-relaxed pr-4">{t.description}</p>
-                         <div className="mt-2 text-[9px] font-black text-blue-600 uppercase tracking-widest bg-blue-50 px-2 py-1 rounded-lg self-start">
-                            JETZT LADEN
+                         <div className="absolute top-4 right-4 p-2 bg-blue-50 rounded-xl opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0">
+                            <ExternalLink size={12} className="text-blue-500" />
                          </div>
-                      </div>
+                      </button>
                    ))}
+                   
+                   <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-3xl p-10 bg-gray-50/50 hover:border-blue-400 hover:bg-blue-50 transition-all cursor-pointer group">
+                      <span className="text-xl mb-2 group-hover:scale-125 transition-transform">📂</span>
+                      <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Load custom file</span>
+                      <input type="file" onChange={handleLoad} accept=".txt" className="hidden" />
+                   </label>
                 </div>
               </div>
             )}
 
             {sidebarTab === 'ki' && (
-              <div className="animate-in fade-in slide-in-from-left-2 duration-300">
-                <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-6 flex items-center gap-2">
-                   <span className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
-                   Wunsch-Baumeister
-                </h3>
-                <div className="p-6 rounded-3xl bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-100/50 shadow-sm">
-                  <p className="text-[10px] text-purple-700/60 font-bold mb-4 uppercase tracking-widest leading-none">Generative KI</p>
-                  <textarea 
-                     rows={3}
-                     placeholder="Was soll ich bauen? (z.B. Palme, Hund, kleiner Flieger)"
-                     value={aiPrompt}
-                     onChange={(e) => setAiPrompt(e.target.value)}
-                     className="w-full px-4 py-3 border border-purple-200 rounded-2xl text-xs outline-none focus:ring-4 focus:ring-purple-100 focus:border-purple-300 bg-white shadow-inner resize-none mb-4 transition-all"
-                     disabled={isAiLoading}
-                  />
-                  <button 
-                    onClick={handleAiBuild}
-                    disabled={isAiLoading || !aiPrompt.trim()}
-                    className={`w-full py-3.5 rounded-2xl text-[11px] font-black uppercase tracking-widest shadow-xl shadow-purple-200/50 transition-all flex items-center justify-center gap-2 active:scale-95 ${isAiLoading ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:opacity-90'}`}
-                  >
-                    {isAiLoading ? 'Zaubert... 🪄' : 'Herbeizaubern'}
-                  </button>
-                  <p className="mt-4 text-[9px] text-purple-400 text-center leading-relaxed">Die KI berechnet ein dreidimensionales Modell und platziert es im Raster.</p>
+              <div className="space-y-6 animate-in fade-in duration-500">
+                <div className="p-8 rounded-[40px] bg-gray-900 shadow-2xl relative overflow-hidden group">
+                  <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity"><Wind size={140} /></div>
+                  <h3 className="text-[10px] uppercase tracking-[0.4em] font-black text-blue-400 mb-2">Neural Build</h3>
+                  <p className="text-[18px] font-black text-white tracking-tight leading-tight mb-8">What should the<br />algorithm construct?</p>
+                  
+                  <div className="space-y-6">
+                    <textarea 
+                       rows={4}
+                       placeholder="Explain your architectural intent..."
+                       value={aiPrompt}
+                       onChange={(e) => setAiPrompt(e.target.value)}
+                       className="w-full px-5 py-5 bg-white/5 border border-white/10 rounded-3xl text-xs font-medium text-white outline-none focus:ring-4 focus:ring-blue-500/20 placeholder:text-white/20 transition-all resize-none"
+                       disabled={isAiLoading}
+                    />
+                    
+                    <button 
+                      onClick={handleAiBuild}
+                      disabled={isAiLoading || !aiPrompt.trim()}
+                      className={`w-full py-5 rounded-[24px] text-[11px] font-black uppercase tracking-[0.2em] transition-all shadow-2xl ${isAiLoading ? 'bg-white/5 text-white/20 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-500 hover:scale-[1.02] active:scale-95 shadow-blue-900/50'}`}
+                    >
+                      {isAiLoading ? (
+                        <div className="flex items-center justify-center gap-3">
+                           <div className="w-2 h-2 bg-white/40 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                           <div className="w-2 h-2 bg-white/40 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                           <div className="w-2 h-2 bg-white/40 rounded-full animate-bounce" />
+                        </div>
+                      ) : 'Initiate Sequence'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {sidebarTab === 'info' && (
+              <div className="animate-in fade-in slide-in-from-left-2 duration-300 space-y-6">
+                <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400 px-1">Engine Info</h3>
+                <div className="p-6 bg-gray-50 rounded-3xl space-y-4">
+                  <p className="text-[10px] text-gray-500 font-bold leading-relaxed">Brickcraft is a high-performance 3D construction engine powered by React and WebGL.</p>
+                  <div className="grid grid-cols-2 gap-2 text-[9px] font-black uppercase tracking-tighter">
+                    <div className="p-3 bg-white rounded-xl border border-gray-100">Blocks: {blocks.length}</div>
+                    <div className="p-3 bg-white rounded-xl border border-gray-100">Gravity: {gravityStrength}</div>
+                  </div>
                 </div>
               </div>
             )}
 
             {sidebarTab === 'werkzeug' && (
-              <div className="animate-in fade-in slide-in-from-left-2 duration-300 space-y-10">
+              <div className="animate-in fade-in slide-in-from-left-2 duration-300 space-y-8">
+                <section>
+                   <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400 mb-6 px-1">Audio Synthesis</h3>
+                   <div className="space-y-3">
+                      {[
+                        { id: 'sfx', label: 'Sound-Effekte', icon: Volume2, state: sfxEnabled, setter: setSfxEnabled },
+                        { id: 'ambient', label: 'Atmosphäre (Wind/Nacht)', icon: Wind, state: ambientEnabled, setter: setAmbientEnabled },
+                        { id: 'music', label: 'Lo-Fi Beats', icon: Music, state: musicEnabled, setter: setMusicEnabled }
+                      ].map((item) => (
+                        <button 
+                           key={item.id}
+                           onClick={() => {
+                             AudioEngine.init();
+                             setIsAudioReady(true);
+                             item.setter(!item.state);
+                           }}
+                           className={`w-full flex items-center justify-between p-4 rounded-2xl border transition-all ${item.state ? 'bg-blue-50 border-blue-100 text-blue-700' : 'bg-white border-gray-100 text-gray-400 hover:border-blue-100 hover:text-gray-600'}`}
+                        >
+                           <div className="flex items-center gap-3">
+                              <div className={`p-2 rounded-xl ${item.state ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-400'}`}>
+                                 <item.icon size={18} />
+                              </div>
+                              <span className="text-xs font-black uppercase tracking-tight">{item.label}</span>
+                           </div>
+                           <div className={`w-10 h-5 rounded-full p-1 transition-colors relative ${item.state ? 'bg-blue-500' : 'bg-gray-200'}`}>
+                              <div className={`w-3 h-3 bg-white rounded-full transition-transform ${item.state ? 'translate-x-5' : 'translate-x-0'}`} />
+                           </div>
+                        </button>
+                      ))}
+                   </div>
+                </section>
+
                 <section>
                    <h3 className="text-[11px] uppercase tracking-[0.1em] font-bold text-gray-400 mb-4 flex items-center gap-2">
                      <span className="w-4 h-[1px] bg-gray-200" /> Physik-Simulation
@@ -1683,17 +2602,111 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
             </div>
 
           </div>
+          
+          {/* BOTTOM QUICK STATS */}
+          <div className="p-6 bg-gray-50/50 border-t border-gray-100 flex items-center justify-between">
+             <div className="flex gap-4">
+                <div className="text-center">
+                   <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Bricks</p>
+                   <p className="text-xs font-black text-gray-900">{blocks.length}</p>
+                </div>
+                <div className="h-4 w-[1px] bg-gray-200 mt-2" />
+                <div className="text-center">
+                   <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Height</p>
+                   <p className="text-xs font-black text-gray-900"><span ref={hudHeightRef}>0</span>u</p>
+                </div>
+             </div>
+             <button onClick={() => setSidebarTab('info')} className="p-2.5 bg-white border border-gray-100 rounded-xl text-gray-400 hover:text-blue-600 hover:border-blue-200 transition-all shadow-sm active:scale-95">
+                <Info size={16} />
+             </button>
+          </div>
         </aside>
 
-        {/* Right Content: 3D Viewport (React Three Fiber) */}
-        <div className="flex-1 relative flex items-center justify-center p-0 m-0 transition-colors duration-500" style={{
+        {/* Center: Canvas Area */}
+        <section className="flex-1 relative bg-gray-100 overflow-hidden">
+           
+           {/* MOUSE MODE MENÜ */}
+           <div className="absolute left-6 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2 p-2 bg-white/80 backdrop-blur-xl border border-gray-100 rounded-3xl shadow-xl shadow-gray-200/50">
+              {[
+                { id: 'interact', label: 'Bewegen / Interagieren', icon: Hand },
+                { id: 'select', label: 'Auswählen', icon: MousePointer2 },
+                { id: 'build', label: 'Bauen / Löschen', icon: Hammer },
+                { id: 'paint', label: 'Einfärben', icon: Paintbrush },
+              ].map(mode => (
+                <button
+                  key={mode.id}
+                  onClick={() => setMouseMode(mode.id as any)}
+                  title={mode.label}
+                  className={`w-12 h-12 flex flex-col items-center justify-center rounded-2xl transition-all duration-300 ${mouseMode === mode.id ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-100 hover:text-gray-800'}`}
+                >
+                  <mode.icon size={20} />
+                </button>
+              ))}
+           </div>
+
+           {/* SELECTION FLOATING UI */}
+           {selectedIds.length > 0 && (
+              <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 p-1.5 bg-gray-900/90 backdrop-blur-2xl rounded-[28px] shadow-[0_20px_50px_rgba(0,0,0,0.3)] border border-white/10 animate-in slide-in-from-bottom-10 duration-500">
+                <div className="px-6 py-2 border-r border-white/5 flex flex-col justify-center">
+                   <p className="text-[9px] text-blue-400 font-black uppercase tracking-[0.2em] mb-0.5">Focus Mode</p>
+                   <p className="text-white text-[14px] font-black tracking-tight">{selectedIds.length} <span className="text-white/40 text-[10px] uppercase ml-1">Stacked</span></p>
+                </div>
+                <div className="flex items-center gap-1.5 p-1">
+                   <button 
+                      onClick={duplicateSelection}
+                      className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] transition-all hover:scale-[1.02] active:scale-95 shadow-xl shadow-blue-900/20"
+                   >
+                     Duplicate
+                   </button>
+                   <button 
+                      onClick={() => {
+                         const next = blocks.filter(b => !selectedIds.includes(b.id));
+                         updateBlocks(next);
+                         setSelectedIds([]);
+                      }}
+                      className="px-8 py-3 bg-red-600/10 hover:bg-red-600/20 text-red-500 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] border border-red-500/20 transition-all active:scale-95"
+                   >
+                     Clear Selection
+                   </button>
+                   <button 
+                      onClick={() => setSelectedIds([])}
+                      className="w-11 h-11 flex items-center justify-center text-white/30 hover:text-white transition-all rounded-full hover:bg-white/5"
+                   >
+                      <Info size={18} />
+                   </button>
+                </div>
+              </div>
+           )}
+
+           {/* Vertical Lock Indicator */}
+           {isShiftActive && (
+             <div className="absolute top-8 left-1/2 -translate-x-1/2 z-20 animate-in slide-in-from-top-8 duration-500">
+                <div className="px-6 py-2.5 bg-blue-600 text-white rounded-full text-[10px] font-black uppercase tracking-[0.3em] shadow-2xl flex items-center gap-4">
+                   <div className="w-1.5 h-1.5 bg-white rounded-full animate-ping" />
+                   Vertical-Lock Engaged
+                </div>
+             </div>
+           )}
+
+           {/* Cursor Status */}
+           {isCtrlPressed.current && (
+             <div className="absolute top-8 right-8 z-30 pointer-events-none animate-in fade-in duration-500 scale-110">
+                <div className="px-5 py-2.5 bg-gray-900/95 backdrop-blur-xl text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.25em] flex items-center gap-3 border border-white/20 shadow-2xl shadow-blue-900/20">
+                   <div className="w-2.5 h-2.5 bg-blue-500 rounded-full shadow-[0_0_15px_#3b82f6]" />
+                   Multi-Selector
+                </div>
+             </div>
+           )}
+
+        {/* --- Central Canvas Content --- */}
+        <div className="flex-1 relative flex items-center justify-center p-0 m-0 transition-colors duration-500 h-full w-full" style={{
            backgroundImage: `radial-gradient(circle, ${isNightMode ? '#1e1b4b' : '#d1d5db'} 1px, transparent 1px)`,
            backgroundColor: isNightMode ? '#010103' : '#f3f4f6',
            backgroundSize: '40px 40px'
         }}
         onPointerUp={(e) => {
            // Handle placement on "empty" space if height lock is active
-           if (e.button === 0 && shiftState.current.active && !isDrag(e)) {
+           if (e.button === 0 && shiftState.current.active && !isDrag(e) && mouseMode === 'build') {
               addBlock(ghostPosRef.current);
            }
         }}
@@ -1703,7 +2716,17 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
             camera={{ position: [10, 10, 10], fov: 45 }} 
             gl={{ alpha: true, antialias: true, stencil: false, depth: true, toneMapping: THREE.ACESFilmicToneMapping }}
           >
-        <OrbitControls makeDefault maxPolarAngle={Math.PI / 1.8} minDistance={2} maxDistance={100} />
+        <OrbitControls 
+          makeDefault 
+          maxPolarAngle={Math.PI / 1.8} 
+          minDistance={2} 
+          maxDistance={100}
+          mouseButtons={{
+            LEFT: THREE.MOUSE.ROTATE,
+            MIDDLE: THREE.MOUSE.DOLLY,
+            RIGHT: THREE.MOUSE.PAN
+          }}
+        />
         
         <ambientLight 
           intensity={isNightMode ? 0.35 : 0.6} 
@@ -1722,58 +2745,87 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
           shadow-camera-bottom={-25}
         />
 
-        {isNightMode ? (
+        {isNightMode && (
            <group>
               <pointLight position={[-20, 10, -20]} intensity={0.5} color="#223366" />
               <pointLight position={[20, 10, 20]} intensity={0.2} color="#112244" />
               <pointLight position={[0, 15, 0]} intensity={0.3} color="#223388" distance={50} />
-               {blocks.filter(b => COLOR_MAP.get(b.color)?.isGlow).slice(0, 30).map((b) => (
-                  <pointLight 
-                    key={`light-${b.id}`}
-                    position={[b.position[0], b.position[1] + 0.4, b.position[2]]}
-                    intensity={10.0}
-                    distance={8}
-                    color={COLOR_MAP.get(b.color)?.emissive}
-                    decay={2}
-                  />
-               ))}
+              {Array.from({ length: 30 }).map((_, i) => {
+                 const b = activeGlowBlocks[i];
+                 if (!b) return <pointLight key={`pool-light-${i}`} intensity={0} distance={0.1} />;
+                 return (
+                   <pointLight 
+                     key={`pool-light-${i}`}
+                     position={[b.position[0], b.position[1] + 0.4, b.position[2]]}
+                     intensity={10.0}
+                     distance={8}
+                     color={b.partId === 'logic_led' ? (COLOR_MAP.get(b.color)?.emissive || b.color || '#ff3333') : (COLOR_MAP.get(b.color)?.emissive || '#ff3333')}
+                     decay={2}
+                   />
+                 );
+              })}
            </group>
-        ) : (
-           <Sky sunPosition={[10, 20, 10]} turbidity={0.1} rayleigh={0.5} />
         )}
         
-        <Environment preset={isNightMode ? "night" : "city"} />
-        <SceneSettings isNightMode={isNightMode} />
+        <Environment 
+          map={customEnvMap} 
+          blur={showGrid ? 0.6 : 0}
+        />
+        <SceneSettings isNightMode={isNightMode} showGrid={showGrid} />
 
         {/* Baseplate / Floor */}
         <mesh 
           rotation={[-Math.PI / 2, 0, 0]} 
           position={[0, -0.5, 0]} 
           receiveShadow
+          onPointerDown={(e) => {
+            const cx = e.nativeEvent?.clientX ?? e.clientX ?? 0;
+            const cy = e.nativeEvent?.clientY ?? e.clientY ?? 0;
+            if (pointerDownPos) {
+              pointerDownPos.current = { x: cx, y: cy };
+            }
+          }}
           onPointerUp={(e) => {
             e.stopPropagation();
-            if (isDrag(e)) return;
-            if ((window as any)._shiftIsActive) return; // Managed globally when height locking
+            if (isDrag(e)) {
+               return;
+            }
+            if ((window as any)._shiftIsActive) return;
             if (e.button === 0) {
-              const n = new THREE.Vector3(0, 1, 0);
-              addBlock(getGridPos(e.point, n, currentPart.size, snapToGrid, currentRotation));
+              if (mouseMode === 'build') {
+                 const n = new THREE.Vector3(0, 1, 0);
+                 addBlock(getGridPos(e.point, n, currentPart.size, snapToGrid, currentRotation));
+              } else if (mouseMode === 'select') {
+                 setSelectedIds([]);
+              }
             }
           }}
           onPointerMove={(e) => {
             e.stopPropagation();
-            const n = new THREE.Vector3(0, 1, 0);
-            updateGhost(true, getGridPos(e.point, n, currentPart.size, snapToGrid, currentRotation));
+            if (mouseMode === 'build' || isCtrlPressed.current) {
+               const n = new THREE.Vector3(0, 1, 0);
+               const gridPos = getGridPos(e.point, n, currentPart.size, snapToGrid, currentRotation);
+               updateGhost(!isCtrlPressed.current && mouseMode === 'build', gridPos);
+            } else {
+               updateGhost(false);
+            }
           }}
           onPointerOut={() => {
             updateGhost(false);
           }}
-          onContextMenu={(e) => e.stopPropagation()} // Prevent default context menu on floor
+          onContextMenu={(e) => {
+             e.stopPropagation();
+             if (mouseMode === 'select') {
+                setSelectedIds([]);
+             }
+          }} // Clear selection on floor right click and prevent default
         >
           <planeGeometry args={[32, 32]} />
-          <meshStandardMaterial 
+           <meshStandardMaterial 
             color={isNightMode ? "#2a2a35" : "#e5e7eb"} 
-            roughness={isNightMode ? 0.3 : 0.7} 
-            metalness={isNightMode ? 0.2 : 0.05} 
+            roughness={isNightMode ? 0.7 : 0.9} 
+            metalness={isNightMode ? 0.1 : 0.0} 
+            roughnessMap={roughnessMap}
             opacity={showGrid ? 0.6 : 1.0} 
             transparent={showGrid} 
             side={THREE.DoubleSide} 
@@ -1799,7 +2851,92 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
           currentPart={currentPart}
           currentRotation={currentRotation}
           isDrag={isDrag}
+          pointerDownPos={pointerDownPos}
+          selectedIds={selectedIds}
+          onSelect={setSelectedIds}
+          isCtrlPressed={isCtrlPressed}
+          transformOffset={transformOffset}
+          logicState={logicState}
+          toggleBlockMeta={toggleBlockMeta}
+          mouseMode={mouseMode}
+          currentColor={currentColor}
+          updateBlockColor={updateBlockColor}
         />
+
+        <BatteriesGroup 
+           blocks={blocks}
+           geometries={geometries}
+           selectedIds={selectedIds}
+           transformOffset={transformOffset}
+           toggleBlockMeta={toggleBlockMeta}
+           mouseMode={mouseMode}
+           onSelect={setSelectedIds}
+           isDrag={isDrag}
+           removeBlock={removeBlock}
+        />
+
+        {selectedIds.length > 0 && (
+          <TransformControls
+            object={transformDummyRef}
+            mode="translate"
+            onMouseDown={() => {
+              setIsTransforming(true);
+              const selectedBlocks = blocksRef.current.filter(b => selectedIds.includes(b.id));
+              const initPos: Record<string, number[]> = {};
+              selectedBlocks.forEach(b => {
+                initPos[b.id] = [...b.position];
+              });
+              initialPositionsRef.current = initPos;
+              if (transformDummyRef.current) {
+                transformDummyRef.current.userData.initialPosition = [
+                  transformDummyRef.current.position.x,
+                  transformDummyRef.current.position.y,
+                  transformDummyRef.current.position.z,
+                ];
+              }
+            }}
+            onMouseUp={() => {
+              setIsTransforming(false);
+              if (transformOffset && (transformOffset[0] !== 0 || transformOffset[1] !== 0 || transformOffset[2] !== 0)) {
+                let yBelowFloor = false;
+                const newBlocks = blocksRef.current.map(b => {
+                  if (selectedIds.includes(b.id)) {
+                    const ny = initialPositionsRef.current[b.id][1] + transformOffset[1];
+                    if (ny < -0.45) yBelowFloor = true;
+                    return {
+                      ...b,
+                      position: [
+                        initialPositionsRef.current[b.id][0] + transformOffset[0],
+                        ny,
+                        initialPositionsRef.current[b.id][2] + transformOffset[2],
+                      ]
+                    };
+                  }
+                  return b;
+                });
+                
+                if (!yBelowFloor) {
+                  updateBlocks(newBlocks);
+                }
+              }
+              setTransformOffset(null);
+            }}
+            onChange={(e) => {
+              if (isTransforming && transformDummyRef.current && transformDummyRef.current.userData.initialPosition) {
+                const dx = transformDummyRef.current.position.x - transformDummyRef.current.userData.initialPosition[0];
+                const dy = transformDummyRef.current.position.y - transformDummyRef.current.userData.initialPosition[1];
+                const dz = transformDummyRef.current.position.z - transformDummyRef.current.userData.initialPosition[2];
+                
+                const snappedDx = snapToGrid ? Math.round(dx / 0.5) * 0.5 : dx;
+                const snappedDy = snapToGrid ? Math.round(dy / (1/3)) * (1/3) : dy;
+                const snappedDz = snapToGrid ? Math.round(dz / 0.5) * 0.5 : dz;
+                
+                setTransformOffset([snappedDx, snappedDy, snappedDz]);
+              }
+            }}
+          />
+        )}
+        <group ref={transformDummyRef} />
 
         {fallingGroups.map(fg => (
           <FallingGroup 
@@ -1819,7 +2956,8 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                   color={currentColor}
                   transparent 
                   opacity={0.5}
-                  roughness={0.2}
+                  roughness={0.4}
+                  roughnessMap={microRoughnessMap}
                   depthWrite={false}
                   emissive={isNightMode ? currentColor : '#000000'}
                   emissiveIntensity={isNightMode ? 0.8 : 0.2}
@@ -1872,7 +3010,8 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
         Position: {blocks.length > 0 ? blocks[blocks.length - 1].position.map((n: number) => n.toFixed(1)).join(', ') : '0, 0, 0'} &nbsp; | &nbsp; Bauteile: {blocks.length} &nbsp; | &nbsp; Raster: {snapToGrid ? '1' : 'Frei'}
       </div>
       
-        </div>
+      </div>
+      </section>
       </main>
     </div>
   );
