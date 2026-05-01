@@ -8,6 +8,7 @@ import { TEMPLATES } from './templates';
 import { GoogleGenAI } from "@google/genai";
 
 import { Volume2, VolumeX, Music, Wind, Search, Info, ExternalLink, ChevronDown, ChevronUp, Zap, Hand, MousePointer2, Hammer, Paintbrush, Undo2, Redo2, X } from 'lucide-react';
+import { COLORS, COLOR_MAP, PLATE_HEIGHT, BRICK_HEIGHT, GRID_UNIT_WIDTH, GRID_UNIT_HEIGHT, STUD_HEIGHT, STUD_RADIUS, PARTS, PART_MAP, getGridPos, normalizePos, getCollisionBoxes, checkCollision } from './parts';
 
 const AudioEngine = {
   ctx: null as AudioContext | null,
@@ -162,24 +163,6 @@ const AudioEngine = {
   }
 };
 
-
-const COLORS = [
-  { name: 'White', value: '#FFFFFF' },
-  { name: 'Tan', value: '#E4CD9E' },
-  { name: 'Red', value: '#C91A09' },
-  { name: 'Blue', value: '#0055BF' },
-  { name: 'Yellow', value: '#F2CD37' },
-  { name: 'Black', value: '#262626' },
-  { name: 'Green', value: '#28914E' },
-  { name: 'Medium Blue', value: '#5A93DB' },
-  { name: 'Orange', value: '#FE8A18' },
-  { name: 'Reddish Brown', value: '#9B4F35' },
-  { name: 'Light Bluish Grey', value: '#A0A5A9' },
-  { name: 'Dark Bluish Grey', value: '#6C6E68' },
-];
-
-const COLOR_MAP = new Map(COLORS.map(c => [c.value, c]));
-
 function LicenseItem({ title, license, content }: { title: string, license: string, content: string }) {
   const [isOpen, setIsOpen] = useState(false);
   return (
@@ -206,77 +189,6 @@ function LicenseItem({ title, license, content }: { title: string, license: stri
     </div>
   );
 }
-
-// Definition of block types. Size is [x, z, y_height] in grid units
-const PLATE_HEIGHT = 0.2;
-const BRICK_HEIGHT = 0.6;
-const STUD_HEIGHT = 0.1125;
-const STUD_RADIUS = 0.15;
-const BRICK_SIZES = [
-  { id: '1x1', label: '1x1', size: [1, 1] },
-  { id: '1x2', label: '1x2', size: [1, 2] },
-  { id: '1x3', label: '1x3', size: [1, 3] },
-  { id: '1x4', label: '1x4', size: [1, 4] },
-  { id: '1x6', label: '1x6', size: [1, 6] },
-  { id: '1x8', label: '1x8', size: [1, 8] },
-  { id: '1x10', label: '1x10', size: [1, 10] },
-  { id: '2x2', label: '2x2', size: [2, 2] },
-  { id: '2x3', label: '2x3', size: [2, 3] },
-  { id: '2x4', label: '2x4', size: [2, 4] },
-  { id: '2x6', label: '2x6', size: [2, 6] },
-  { id: '2x8', label: '2x8', size: [2, 8] },
-  { id: '2x10', label: '2x10', size: [2, 10] },
-  { id: '4x4', label: '4x4', size: [4, 4] },
-  { id: '6x6', label: '6x6', size: [6, 6] },
-];
-
-const SPECIAL_PARTS = [
-  { id: 'slope1x2', label: '1x2 Dach', size: [1, 2, BRICK_HEIGHT], type: 'slope' },
-  { id: 'slope2x2', label: '2x2 Dach', size: [2, 2, BRICK_HEIGHT], type: 'slope' },
-  { id: 'slope_1x1_plate', label: '1x1 Dach Platte', size: [1, 1, PLATE_HEIGHT], type: 'slope' },
-  { id: 'slope_2x2_2studs', label: '2x2 Dach (2 Noppen)', size: [2, 2, BRICK_HEIGHT], type: 'slope_2studs' },
-  { id: 'slope2x4', label: '2x4 Dach', size: [2, 4, BRICK_HEIGHT], type: 'slope' },
-  { id: 'wedge_3x3_plate', label: '3x3 Keilplatte', size: [3, 3, PLATE_HEIGHT], type: 'wedge_plate' },
-  { id: 'tile1x1', label: '1x1 Fliese', size: [1, 1, PLATE_HEIGHT], type: 'tile' },
-  { id: 'tile1x2', label: '1x2 Fliese', size: [1, 2, PLATE_HEIGHT], type: 'tile' },
-  { id: 'tile1x4', label: '1x4 Fliese', size: [1, 4, PLATE_HEIGHT], type: 'tile' },
-  { id: 'tile2x2', label: '2x2 Fliese', size: [2, 2, PLATE_HEIGHT], type: 'tile' },
-  { id: 'tile2x4', label: '2x4 Fliese', size: [2, 4, PLATE_HEIGHT], type: 'tile' },
-  { id: 'tile4x4', label: '4x4 Fliese', size: [4, 4, PLATE_HEIGHT], type: 'tile' },
-  { id: 'corner2x2', label: '2x2 Winkelplatte', size: [2, 2, PLATE_HEIGHT], type: 'corner' },
-  // Round Parts
-  { id: 'round_1x1_brick', label: '1x1 Rundstein', size: [1, 1, BRICK_HEIGHT], type: 'cylinder' },
-  { id: 'round_1x1_plate', label: '1x1 Rundplatte', size: [1, 1, PLATE_HEIGHT], type: 'cylinder' },
-  { id: 'round_1x1_tile', label: '1x1 Rundfliese', size: [1, 1, PLATE_HEIGHT], type: 'tile' },
-  { id: 'round_2x2_brick', label: '2x2 Rundstein', size: [2, 2, BRICK_HEIGHT], type: 'cylinder' },
-  { id: 'round_2x2_plate', label: '2x2 Rundplatte', size: [2, 2, PLATE_HEIGHT], type: 'cylinder' },
-  { id: 'round_2x2_tile', label: '2x2 Rundfliese', size: [2, 2, PLATE_HEIGHT], type: 'tile' },
-  { id: 'round_3x3_plate', label: '3x3 Rundplatte', size: [3, 3, PLATE_HEIGHT], type: 'cylinder' },
-  { id: 'round_3x3_tile', label: '3x3 Rundfliese', size: [3, 3, PLATE_HEIGHT], type: 'tile' },
-  { id: 'dish_3x3_inv', label: '3x3 Radar (inv)', size: [3, 3, PLATE_HEIGHT], type: 'dish_inverted' },
-  { id: 'dish_3x3_test', label: '3x3 Radar TEST', size: [3, 3, PLATE_HEIGHT], type: 'dish_test' },
-  { id: 'round_4x4_brick', label: '4x4 Rundstein', size: [4, 4, BRICK_HEIGHT], type: 'cylinder' },
-  { id: 'round_4x4_plate', label: '4x4 Rundplatte', size: [4, 4, PLATE_HEIGHT], type: 'cylinder' },
-  { id: 'cone_1x1', label: '1x1 Kegelstein', size: [1, 1, BRICK_HEIGHT], type: 'cone' },
-  { id: 'cone_2x2', label: '2x2 Kegelstein', size: [2, 2, BRICK_HEIGHT * 2], type: 'cone' },
-  { id: 'jumper_1x2', label: '1x2 Jumper-Platte', size: [1, 2, PLATE_HEIGHT], type: 'jumper' },
-  { id: 'jumper_round_2x2', label: '2x2 Rund-Jumper', size: [2, 2, PLATE_HEIGHT], type: 'jumper_round' },
-  { id: 'slope_inv_1x2', label: '1x2 Dach Invers', size: [1, 2, BRICK_HEIGHT], type: 'slope_inv' },
-  { id: 'logic_wire', label: 'Redstone Kabel', size: [1, 1, PLATE_HEIGHT], type: 'tile' },
-  { id: 'logic_battery', label: 'Batterieblock', size: [2, 2, BRICK_HEIGHT], type: 'brick' },
-  { id: 'logic_led', label: 'LED Block 2x2', size: [2, 2, BRICK_HEIGHT], type: 'brick' },
-];
-
-export const PARTS = [
-  // 1. STANDARD BRICKS (sorted by size)
-  ...BRICK_SIZES.map(s => ({ id: `brick_${s.id}`, label: `${s.label} Stein`, size: [s.size[0], s.size[1], BRICK_HEIGHT], type: 'brick' })),
-  // 2. STANDARD PLATES (sorted by size)
-  ...BRICK_SIZES.map(s => ({ id: `plate_${s.id}`, label: `${s.label} Platte`, size: [s.size[0], s.size[1], PLATE_HEIGHT], type: 'plate' })),
-  // 3. SPECIAL PARTS (slopes, etc.)
-  ...SPECIAL_PARTS
-];
-
-export const PART_MAP = new Map(PARTS.map(p => [p.id, p]));
 
 const baseplateStudUVsOnCompile = (shader: any) => {
   shader.vertexShader = shader.vertexShader.replace(
@@ -525,134 +437,6 @@ const { roughnessMap, floorRoughnessMap, studFloorRoughnessMap, studFloorNormalM
  * @param rotation - Current Y-axis rotation (0-3).
  * @returns [x, y, z] snapped world coordinates.
  */
-export function getGridPos(point: THREE.Vector3, normal: THREE.Vector3, size: number[], snapToGrid: boolean, rotation: number, allowHalfStud: boolean = false): number[] {
-  // Determine actual footprint dimensions based on rotation
-  const isRotated = rotation % 2 !== 0;
-  const sx = isRotated ? size[1] : size[0];
-  const sz = isRotated ? size[0] : size[1];
-  const sy = size[2];
-
-  // If snapping is disabled, return approximate placement relative to surface
-  if (!snapToGrid) {
-     return [
-       point.x + normal.x * (sx * 0.25), 
-       point.y + normal.y * (sy * 0.5), 
-       point.z + normal.z * (sz * 0.25)
-     ];
-  }
-
-  // Grid size: by default 0.5 (1 full stud). If allowHalfStud is true, use 0.25 (half stud).
-  const gridSize = allowHalfStud ? 0.25 : 0.5;
-
-  const offsetX = sx * 0.25;
-  const targetX = point.x + normal.x * offsetX;
-  const snappedX = Math.round((targetX - offsetX) / gridSize) * gridSize + offsetX;
-
-  const offsetZ = sz * 0.25;
-  const targetZ = point.z + normal.z * offsetZ;
-  const snappedZ = Math.round((targetZ - offsetZ) / gridSize) * gridSize + offsetZ;
-
-  // Y-snapping: Vertical height snaps in units of a plate (1/3 of a full brick height).
-  // The baseplate plane starts at y = -0.5.
-  const targetCenterY = point.y + normal.y * (sy * 0.5);
-  const targetBottomY = targetCenterY - sy * 0.5;
-  const stepsY = Math.round((targetBottomY - (-0.5)) / PLATE_HEIGHT);
-  const snappedBottomY = -0.5 + stepsY * PLATE_HEIGHT;
-  const snappedY = snappedBottomY + sy * 0.5;
-
-  return [snappedX, snappedY, snappedZ];
-}
-
-/**
- * Normalizes position data into a standard [x, y, z] array.
- * Robustly handles missing data or NaN values encountered during save/load.
- */
-const normalizePos = (p: any): number[] => {
-  if (Array.isArray(p)) return [isNaN(p[0]) ? 0 : p[0], isNaN(p[1]) ? 0 : p[1], isNaN(p[2]) ? 0 : p[2]];
-  return [p?.x || 0, p?.y || 0, p?.z || 0];
-};
-
-/**
- * Generates one or more bounding boxes for a specific part type.
- * Used for physics collision checks and stability calculations.
- */
-export function getCollisionBoxes(posRaw: any, part: any, rot: number) {
-  const pos = normalizePos(posRaw);
-  const isRot = rot % 2 !== 0;
-  const sx = (isRot ? part.size[1] : part.size[0]) * 0.5;
-  const sz = (isRot ? part.size[0] : part.size[1]) * 0.5;
-  const sy = part.size[2];
-
-  // Specific logic for L-shaped corner parts
-  if (part.type === 'corner') {
-    const wActual = part.size[0] * 0.5;
-    const dActual = part.size[1] * 0.5;
-    
-    // Sub-boxes defining the L-shape unrotated
-    const boxes = [
-      { minX: -wActual/2, maxX: wActual/2, minY: -sy/2, maxY: sy/2, minZ: -dActual/2, maxZ: 0 },
-      { minX: -wActual/2, maxX: 0, minY: -sy/2, maxY: sy/2, minZ: 0, maxZ: dActual/2 }
-    ];
-
-    return boxes.map(b => {
-      // Rotate the local bounds around the center point
-      let minX = b.minX, maxX = b.maxX, minZ = b.minZ, maxZ = b.maxZ;
-      for (let i = 0; i < (rot % 4); i++) {
-        const p1x = minX, p1z = minZ;
-        const p2x = maxX, p2z = maxZ;
-        minX = p1z; minZ = -p2x;
-        maxX = p2z; maxZ = -p1x;
-      }
-
-      return {
-        minX: pos[0] + Math.min(minX, maxX),
-        maxX: pos[0] + Math.max(minX, maxX),
-        minY: pos[1] + b.minY,
-        maxY: pos[1] + b.maxY,
-        minZ: pos[2] + Math.min(minZ, maxZ),
-        maxZ: pos[2] + Math.max(minZ, maxZ),
-      };
-    });
-  }
-
-  // Standard rectangular bounding box for most parts
-  return [{
-    minX: pos[0] - sx / 2,
-    maxX: pos[0] + sx / 2,
-    minY: pos[1] - sy / 2,
-    maxY: pos[1] + sy / 2,
-    minZ: pos[2] - sz / 2,
-    maxZ: pos[2] + sz / 2,
-  }];
-}
-
-/**
- * Checks for intersection between two blocks.
- * Uses Axis-Aligned Bounding Box (AABB) intersection for efficiency.
- */
-export function checkCollision(posA: number[], partA: any, rotA: number, posB: number[], partB: any, rotB: number) {
-  const boxesA = getCollisionBoxes(posA, partA, rotA);
-  const boxesB = getCollisionBoxes(posB, partB, rotB);
-  
-  const EPSILON = 0.05; // Guard against floating point errors
-  
-  for (const a of boxesA) {
-    for (const b of boxesB) {
-      if (
-        a.minX < b.maxX - EPSILON && 
-        a.maxX > b.minX + EPSILON && 
-        a.minY < b.maxY - EPSILON && 
-        a.maxY > b.minY + EPSILON && 
-        a.minZ < b.maxZ - EPSILON && 
-        a.maxZ > b.minZ + EPSILON
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 /**
  * Custom hook to pre-generate and memoize Three.js geometries for all parts.
  * Merges visual components (base, studs, holes) into single BufferGeometries
@@ -664,19 +448,19 @@ function useBrickGeometries() {
     
     PARTS.forEach(part => {
       const [w, d, h] = part.size;
-      const wActual = w * 0.5; // 0.5 units per stud
-      const dActual = d * 0.5;
+      const wActual = w * GRID_UNIT_WIDTH; 
+      const dActual = d * GRID_UNIT_WIDTH;
+      const hActual = h * GRID_UNIT_HEIGHT;
       
       const visualParts = [];
       const edgeParts = [];
       
       // Base Shape
       const isRound = part.type === 'cylinder' || (part.type === 'tile' && part.id.includes('round'));
-      const wallT = 0.05;
-      const roofT = Math.min(0.1, h); // ensure roof is not thicker than the piece
+      const roofT = Math.min(0.1, hActual); // ensure roof is not thicker than the piece
       
       if ((part.type === 'box' || part.type === 'tile' || part.type === 'brick' || part.type === 'plate') && !isRound) {
-         const body = new THREE.BoxGeometry(wActual, h, dActual);
+         const body = new THREE.BoxGeometry(wActual, hActual, dActual);
          visualParts.push(body);
          edgeParts.push(body);
       } else if (isRound || part.type === 'cylinder_hole') {
@@ -688,22 +472,22 @@ function useBrickGeometries() {
             const holePath = new THREE.Path();
             holePath.absarc(0, 0, innerRadius, 0, Math.PI * 2, true);
             shape.holes.push(holePath);
-            const holeGeo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
+            const holeGeo = new THREE.ExtrudeGeometry(shape, { depth: hActual, bevelEnabled: false });
             holeGeo.center();
             holeGeo.rotateX(Math.PI / 2);
             visualParts.push(holeGeo);
             edgeParts.push(holeGeo);
          } else {
-            const cyl = new THREE.CylinderGeometry(wActual / 2, wActual / 2, h, 32);
+            const cyl = new THREE.CylinderGeometry(wActual / 2, wActual / 2, hActual, 32);
             visualParts.push(cyl);
             edgeParts.push(cyl);
          }
       } else if (part.type === 'slope_inv') {
          const shape = new THREE.Shape();
-         shape.moveTo(-dActual/2, h/2);
-         shape.lineTo(dActual/2, h/2);
-         shape.lineTo(dActual/2, -h/2);
-         shape.lineTo(-dActual/2, h/2); 
+         shape.moveTo(-dActual/2, hActual/2);
+         shape.lineTo(dActual/2, hActual/2);
+         shape.lineTo(dActual/2, -hActual/2);
+         shape.lineTo(-dActual/2, hActual/2); 
          const extrudeSettings = { depth: wActual, bevelEnabled: false };
          const slopeGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
          slopeGeo.center();
@@ -720,199 +504,170 @@ function useBrickGeometries() {
          shape.lineTo(-wActual/2, dActual/2);
          shape.lineTo(-wActual/2, -dActual/2);
          
-         const cornerGeo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
+         const cornerGeo = new THREE.ExtrudeGeometry(shape, { depth: hActual, bevelEnabled: false });
          cornerGeo.center();
          cornerGeo.rotateX(Math.PI / 2);
          visualParts.push(cornerGeo);
          edgeParts.push(cornerGeo);
       } else if (part.type === 'slope') {
-         // Create a slope geometry
          const shape = new THREE.Shape();
-         shape.moveTo(-dActual/2, -h/2);
-         shape.lineTo(dActual/2, -h/2);
-         shape.lineTo(dActual/2, h/2);
-         shape.lineTo(-dActual/2, -h/2); // Slanted side
+         shape.moveTo(-dActual/2, -hActual/2);
+         shape.lineTo(dActual/2, -hActual/2);
+         shape.lineTo(dActual/2, hActual/2);
+         shape.lineTo(-dActual/2, -hActual/2); 
          
          const extrudeSettings = { depth: wActual, bevelEnabled: false };
          const slopeGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
          slopeGeo.center();
-         // Fix rotation: extruded along Z, width was along X. Rotate to map Z -> X, X -> -Z.
          slopeGeo.rotateY(Math.PI / 2);
          visualParts.push(slopeGeo);
          edgeParts.push(slopeGeo);
       } else if (part.type === 'slope_2studs') {
-         // Create the 2x2 slope with 2 studs on the back
          const shape = new THREE.Shape();
-         shape.moveTo(-dActual/2, -h/2);
-         shape.lineTo(dActual/2, -h/2);
-         shape.lineTo(dActual/2, h/2);
-         shape.lineTo(0, h/2);
-         shape.lineTo(-dActual/2, -h/2);
-
+         shape.moveTo(-dActual/2, -hActual/2);
+         shape.lineTo(dActual/2, -hActual/2);
+         shape.lineTo(dActual/2, hActual/2);
+         shape.lineTo(0, hActual/2);
+         shape.lineTo(-dActual/2, -hActual/2);
+ 
          const slopeGeo = new THREE.ExtrudeGeometry(shape, { depth: wActual, bevelEnabled: false });
          slopeGeo.center();
          slopeGeo.rotateY(Math.PI / 2);
          visualParts.push(slopeGeo);
          edgeParts.push(slopeGeo);
-
-         // Add 2 studs on the back half
-         const studGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.1, 16);
+ 
+         const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
          for (let x = 0; x < w; x++) {
-            const sx = (x - w/2 + 0.5) * 0.5;
-            const sz = -(1.5 - d/2) * 0.5; // Fixed: negate to place on the back half
+            const sx = (x - w/2 + 0.5) * GRID_UNIT_WIDTH;
+            const sz = -(1.5 - d/2) * GRID_UNIT_WIDTH; 
             const stud = studGeo.clone();
-            stud.translate(sx, h/2 + 0.05, sz);
+            stud.translate(sx, hActual/2 + STUD_HEIGHT/2, sz);
             visualParts.push(stud);
             edgeParts.push(stud);
          }
       } else if (part.type === 'wedge_plate') {
-         // 3x3 plate with a larger cut for 6 studs (LEGO style 3x3 wedge)
          const shape = new THREE.Shape();
          shape.moveTo(-wActual/2, -dActual/2);
          shape.lineTo(wActual/2, -dActual/2);
-         shape.lineTo(wActual/2, -dActual/2 + 0.5); // cut starts after 1 stud
-         shape.lineTo(-wActual/2 + 0.5, dActual/2); // ends before the last 1 stud
+         shape.lineTo(wActual/2, -dActual/2 + GRID_UNIT_WIDTH); 
+         shape.lineTo(-wActual/2 + GRID_UNIT_WIDTH, dActual/2); 
          shape.lineTo(-wActual/2, dActual/2);
          shape.lineTo(-wActual/2, -dActual/2);
-
-         const wedgeGeo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
+ 
+         const wedgeGeo = new THREE.ExtrudeGeometry(shape, { depth: hActual, bevelEnabled: false });
          wedgeGeo.center();
          wedgeGeo.rotateX(Math.PI / 2);
          visualParts.push(wedgeGeo);
          edgeParts.push(wedgeGeo);
-
-         // Add studs (6 instead of 9)
-         const studGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.1, 16);
+ 
+         const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
          for (let ix = 0; ix < w; ix++) {
             for (let iz = 0; iz < d; iz++) {
-               // Skip the cut corner studs (ix + iz >= 3 for 6 studs)
                if (ix + iz >= 3) continue;
                
-               const sx = (ix - w/2 + 0.5) * 0.5;
-               const sz = (iz - d/2 + 0.5) * 0.5;
+               const sx = (ix - w/2 + 0.5) * GRID_UNIT_WIDTH;
+               const sz = (iz - d/2 + 0.5) * GRID_UNIT_WIDTH;
                const stud = studGeo.clone();
-               stud.translate(sx, h/2 + 0.05, sz);
+               stud.translate(sx, hActual/2 + STUD_HEIGHT/2, sz);
                visualParts.push(stud);
                edgeParts.push(stud);
             }
          }
       } else if (part.type === 'dish_inverted' || part.type === 'dish_test') {
-         // Radar Dish (3x3)
          const segments = 32;
          const outerRadius = wActual / 2;
          const innerRadius = 0.2;
-         const thickness = 0.18; // Even thicker as requested
+         const thickness = 0.18; 
          const isTest = part.type === 'dish_test';
          
          const points = [];
-         
-         // Curve profile
          const curvePoints = 12;
          for (let i = 0; i <= curvePoints; i++) {
             const t = i / curvePoints;
             const r = innerRadius + (outerRadius - innerRadius) * t;
-            // Parabolic curve
-            const y = -h/2 + Math.pow(t, 2.0) * h;
+            const y = -hActual/2 + Math.pow(t, 2.0) * hActual;
             points.push(new THREE.Vector2(r, y));
          }
-         
-         // Inner curve for thickness
          for (let i = curvePoints; i >= 0; i--) {
             const t = i / curvePoints;
             const r = innerRadius + (outerRadius - thickness - innerRadius) * t;
-            const y = -h/2 + Math.pow(t, 2.0) * h + thickness;
+            const y = -hActual/2 + Math.pow(t, 2.0) * hActual + thickness;
             points.push(new THREE.Vector2(Math.max(0.01, r), y));
          }
-         
          const latheGeo = new THREE.LatheGeometry(points, segments);
-         if (isTest) {
-            // Test version (8647) is concave side up
-            latheGeo.rotateX(Math.PI);
-         }
+         if (isTest) latheGeo.rotateX(Math.PI);
          visualParts.push(latheGeo);
          edgeParts.push(latheGeo);
          
-         // Connector (Stud sized hole or solid stud depending on type)
          if (part.type === 'dish_inverted') {
             const connectGeo = new THREE.CylinderGeometry(0.15, 0.25, 0.2, 16);
-            connectGeo.translate(0, -h/2 + 0.1, 0);
+            connectGeo.translate(0, -hActual/2 + 0.1, 0);
             visualParts.push(connectGeo);
          } else {
-            // Stud on the back side for the "test" (regular dish 8647)
-            const studGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.1, 16);
-            studGeo.translate(0, h/2 - thickness/2, 0);
+            const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
+            studGeo.translate(0, hActual/2 - thickness/2, 0);
             visualParts.push(studGeo);
          }
       } else if (part.type === 'cone') {
-         const cyl = new THREE.CylinderGeometry(0.22, wActual / 2, h, 32); 
+         const cyl = new THREE.CylinderGeometry(0.22, wActual / 2, hActual, 32); 
          visualParts.push(cyl);
          edgeParts.push(cyl);
-         const studGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.1, 16);
+         const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
          const stud = studGeo.clone();
-         stud.translate(0, h/2 + 0.05, 0); // single center stud
+         stud.translate(0, hActual/2 + STUD_HEIGHT/2, 0); 
          visualParts.push(stud);
          edgeParts.push(stud);
       } else if (part.type === 'jumper' || part.type === 'jumper_round') {
          if (part.type === 'jumper_round') {
-            const cyl = new THREE.CylinderGeometry(wActual / 2, wActual / 2, h, 32);
+            const cyl = new THREE.CylinderGeometry(wActual / 2, wActual / 2, hActual, 32);
             visualParts.push(cyl);
             edgeParts.push(cyl);
-            // Add a proper center stud inside visualParts for the jumper_round
-            const studGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.1, 16);
+            const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
             const stud = studGeo.clone();
-            stud.translate(0, h/2 + 0.05, 0); // single center stud
+            stud.translate(0, hActual/2 + STUD_HEIGHT/2, 0); 
             visualParts.push(stud);
             edgeParts.push(stud);
          } else {
-            const body = new THREE.BoxGeometry(wActual, h, dActual);
+            const body = new THREE.BoxGeometry(wActual, hActual, dActual);
             visualParts.push(body);
             edgeParts.push(body);
-            
-            const studGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.1, 16);
+            const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
             const stud = studGeo.clone();
-            stud.translate(0, h/2 + 0.05, 0); // single center stud
+            stud.translate(0, hActual/2 + STUD_HEIGHT/2, 0); 
             visualParts.push(stud);
             edgeParts.push(stud);
          }
       }
-
-      // Add studs for boxes and corners (excluding tiles and slopes)
+ 
+      // Add studs for boxes and corners
       if (part.type === 'box' || part.type === 'brick' || part.type === 'plate' || part.type === 'corner' || part.type === 'cylinder' || part.type === 'slope_inv') {
         const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
         for (let x = 0; x < w; x++) {
           for (let z = 0; z < d; z++) {
-            // For corner, skip the front-right stud (where x >= w/2 and z >= d/2)
-            if (part.type === 'corner' && x >= w / 2 && z >= d / 2) {
-              continue;
-            }
-            
-            // For cylinders, only add studs that fit inside the circle
-            // For 3x3 round, remove corner studs as requested (threshold 0.6)
+            if (part.type === 'corner' && x >= w / 2 && z >= d / 2) continue;
             if (part.type === 'cylinder') {
-              const dx = (x - w / 2 + 0.5) * 0.5;
-              const dz = (z - d / 2 + 0.5) * 0.5;
+              const dx = (x - w / 2 + 0.5) * GRID_UNIT_WIDTH;
+              const dz = (z - d / 2 + 0.5) * GRID_UNIT_WIDTH;
               const dist = Math.sqrt(dx * dx + dz * dz);
               const threshold = w === 3 ? 0.6 : (wActual / 2 - 0.01);
               if (dist > threshold) continue;
             }
-
-            const sx = (x - w/2 + 0.5) * 0.5;
-            const sz = (z - d/2 + 0.5) * 0.5;
+            const sx = (x - w/2 + 0.5) * GRID_UNIT_WIDTH;
+            const sz = (z - d/2 + 0.5) * GRID_UNIT_WIDTH;
             const stud = studGeo.clone();
-            stud.translate(sx, h/2 + STUD_HEIGHT/2, sz);
+            stud.translate(sx, hActual/2 + STUD_HEIGHT/2, sz);
             visualParts.push(stud);
             edgeParts.push(stud);
           }
         }
       }
-
-      // Add underside structure (tubes/pins)
+ 
+      // Add underside structure
       if ((part.type === 'box' || part.type === 'brick' || part.type === 'plate' || part.type === 'corner') && !isRound) {
-         // Create the tube generator
          const tubeRadiusOuter = 0.16;
          const tubeRadiusInner = 0.10;
          const pinRadius = 0.08;
-         const innerH = h - (Math.min(0.1, h)); // h - roofT
+         const innerH = hActual - (Math.min(0.1, hActual));
          
          const shape = new THREE.Shape();
          shape.absarc(0, 0, tubeRadiusOuter, 0, Math.PI * 2, false);
@@ -923,51 +678,41 @@ function useBrickGeometries() {
          const hollowTubeGeo = new THREE.ExtrudeGeometry(shape, { depth: innerH, bevelEnabled: false });
          hollowTubeGeo.center();
          hollowTubeGeo.rotateX(Math.PI / 2);
-         
          const pinGeo = new THREE.CylinderGeometry(pinRadius, pinRadius, innerH, 12);
          
-         // Tubes are placed at the intersections of studs
-         // A 2x4 has 1x3 tubes.
          for (let x = 0; x < w - 1; x++) {
            for (let z = 0; z < d - 1; z++) {
-             // For corner, figure out if tube is inside
              if (part.type === 'corner' && x >= w / 2 - 1 && z >= d / 2 - 1) continue;
-             
-             const sx = (x - w/2 + 1) * 0.5;
-             const sz = (z - d/2 + 1) * 0.5;
-             
+             const sx = (x - w/2 + 1) * GRID_UNIT_WIDTH;
+             const sz = (z - d/2 + 1) * GRID_UNIT_WIDTH;
              const tube = hollowTubeGeo.clone();
-             tube.translate(sx, -h/2 + innerH/2, sz);
+             tube.translate(sx, -hActual/2 + innerH/2, sz);
              visualParts.push(tube);
            }
          }
          
-         // Pins for 1xN or Nx1 pieces
          if (w === 1 && d > 1) {
             for (let z = 0; z < d - 1; z++) {
-               const sz = (z - d/2 + 1) * 0.5;
+               const sz = (z - d/2 + 1) * GRID_UNIT_WIDTH;
                const pin = pinGeo.clone();
-               pin.translate(0, -h/2 + innerH/2, sz);
+               pin.translate(0, -hActual/2 + innerH/2, sz);
                visualParts.push(pin);
             }
          } else if (d === 1 && w > 1) {
             for (let x = 0; x < w - 1; x++) {
-               const sx = (x - w/2 + 1) * 0.5;
+               const sx = (x - w/2 + 1) * GRID_UNIT_WIDTH;
                const pin = pinGeo.clone();
-               pin.translate(sx, -h/2 + innerH/2, 0);
+               pin.translate(sx, -hActual/2 + innerH/2, 0);
                visualParts.push(pin);
             }
          }
       }
-
+ 
       if (visualParts.length === 0) return;
-
+ 
       const mergedVisual = mergeGeometries(visualParts.map(g => g.index ? g.toNonIndexed() : g));
       if (mergedVisual) {
         mergedVisual.computeVertexNormals();
-        
-        // Scale UV map based on world coordinates to ensure texture size consistency
-        // with the floor map (16 repeats over 32 units = 1 tile per 2 units).
         const pos = mergedVisual.attributes.position;
         const norm = mergedVisual.attributes.normal;
         const uvs = mergedVisual.attributes.uv;
@@ -976,34 +721,28 @@ function useBrickGeometries() {
               const nx = Math.abs(norm.getX(i));
               const ny = Math.abs(norm.getY(i));
               const nz = Math.abs(norm.getZ(i));
-              
               const px = pos.getX(i);
               const py = pos.getY(i);
               const pz = pos.getZ(i);
               
-              if (ny > nx && ny > nz) {
-                 uvs.setXY(i, px / 2, pz / 2);
-              } else if (nx > ny && nx > nz) {
-                 uvs.setXY(i, pz / 2, py / 2);
-              } else {
-                 uvs.setXY(i, px / 2, py / 2);
-              }
+              if (ny > nx && ny > nz) uvs.setXY(i, px / 2, pz / 2);
+              else if (nx > ny && nx > nz) uvs.setXY(i, pz / 2, py / 2);
+              else uvs.setXY(i, px / 2, py / 2);
            }
            uvs.needsUpdate = true;
         }
       }
       
-      // Collision block is just a simple bounding box, except for corners which need an L-shape
       let collisionGeo;
       if (part.type === 'corner') {
-         const c1 = new THREE.BoxGeometry(wActual, h, dActual / 2);
+         const c1 = new THREE.BoxGeometry(wActual, hActual, dActual / 2);
          c1.translate(0, 0, -dActual / 4);
-         const c2 = new THREE.BoxGeometry(wActual / 2, h, dActual / 2);
+         const c2 = new THREE.BoxGeometry(wActual / 2, hActual, dActual / 2);
          c2.translate(-wActual / 4, 0, dActual / 4);
          const collisionParts = [c1, c2].map(g => g.index ? g.toNonIndexed() : g);
          collisionGeo = mergeGeometries(collisionParts);
       } else {
-         collisionGeo = new THREE.BoxGeometry(wActual, h, dActual);
+         collisionGeo = new THREE.BoxGeometry(wActual, hActual, dActual);
       }
       
       if (mergedVisual && collisionGeo) {
@@ -1030,100 +769,192 @@ function useBrickGeometries() {
  * @param parts - The definition dictionary of available parts.
  * @returns { supportedIds: Set<string>, fallingIds: Set<string> }
  */
-export function performStabilityCheck(blocks: any[], parts: typeof PARTS) {
-    const getPart = (id: string) => PART_MAP.get(id);
+/**
+ * Spatial Partitioning: Simple Octree for fast collision and stability checks
+ */
+class Octree {
+  nodes: Octree[] = [];
+  objects: any[] = [];
+  bounds: { minX: number, maxX: number, minY: number, maxY: number, minZ: number, maxZ: number };
+  capacity = 8;
+  depth: number;
+
+  constructor(bounds: any, depth = 0) {
+    this.bounds = bounds;
+    this.depth = depth;
+  }
+
+  subdivide() {
+    const { minX, maxX, minY, maxY, minZ, maxZ } = this.bounds;
+    const midX = (minX + maxX) / 2;
+    const midY = (minY + maxY) / 2;
+    const midZ = (minZ + maxZ) / 2;
+
+    this.nodes = [
+      new Octree({ minX, maxX: midX, minY, maxY: midY, minZ, maxZ: midZ }, this.depth + 1),
+      new Octree({ minX: midX, maxX, minY, maxY: midY, minZ, maxZ: midZ }, this.depth + 1),
+      new Octree({ minX, maxX: midX, minY: midY, maxY, minZ, maxZ: midZ }, this.depth + 1),
+      new Octree({ minX: midX, maxX, minY: midY, maxY, minZ, maxZ: midZ }, this.depth + 1),
+      new Octree({ minX, maxX: midX, minY, maxY: midY, minZ: midZ, maxZ }, this.depth + 1),
+      new Octree({ minX: midX, maxX, minY, maxY: midY, minZ: midZ, maxZ }, this.depth + 1),
+      new Octree({ minX, maxX: midX, minY: midY, maxY, minZ: midZ, maxZ }, this.depth + 1),
+      new Octree({ minX: midX, maxX, minY: midY, maxY, minZ: midZ, maxZ }, this.depth + 1),
+    ];
+  }
+
+  insert(obj: any) {
+    if (!this.intersects(obj.bounds)) return false;
+
+    if (this.nodes.length === 0 && this.objects.length < this.capacity) {
+      this.objects.push(obj);
+      return true;
+    }
+
+    if (this.nodes.length === 0) this.subdivide();
+
+    for (const node of this.nodes) {
+      if (node.insert(obj)) return true;
+    }
+
+    this.objects.push(obj);
+    return true;
+  }
+
+  intersects(b: any) {
+    return !(b.minX > this.bounds.maxX || b.maxX < this.bounds.minX ||
+             b.minY > this.bounds.maxY || b.maxY < this.bounds.minY ||
+             b.minZ > this.bounds.maxZ || b.maxZ < this.bounds.minZ);
+  }
+
+  query(range: any, result: any[] = []) {
+    if (!this.intersects(range)) return result;
+
+    for (const obj of this.objects) {
+      if (obj.bounds.minX < range.maxX && obj.bounds.maxX > range.minX &&
+          obj.bounds.minY < range.maxY && obj.bounds.maxY > range.minY &&
+          obj.bounds.minZ < range.maxZ && obj.bounds.maxZ > range.minZ) {
+        result.push(obj);
+      }
+    }
+
+    for (const node of this.nodes) {
+      node.query(range, result);
+    }
+
+    return result;
+  }
+}
+
+export function performStabilityCheck(blocks: any[], parts: any) {
   const EPSILON = 0.05;
-
-  // Pre-calculate world-space bounding boxes for all active blocks
-  const blockBoxes = blocks
-    .filter(b => getPart(b.partId) !== undefined)
-    .map(b => ({
-       id: b.id,
-       part: getPart(b.partId)!,
-       boxes: getCollisionBoxes(normalizePos(b.position), getPart(b.partId)!, b.rotation)
-    }));
-
   const supported = new Set<string>();
+  
+  const blockData = blocks.map(b => {
+    const part = PART_MAP.get(b.partId);
+    if (!part) return null;
+    const boxes = getCollisionBoxes(b.position, part, b.rotation);
+    // Combined bounds for the whole block
+    const bounds = {
+      minX: Math.min(...boxes.map(bx => bx.minX)),
+      maxX: Math.max(...boxes.map(bx => bx.maxX)),
+      minY: Math.min(...boxes.map(bx => bx.minY)),
+      maxY: Math.max(...boxes.map(bx => bx.maxY)),
+      minZ: Math.min(...boxes.map(bx => bx.minZ)),
+      maxZ: Math.max(...boxes.map(bx => bx.maxZ))
+    };
+    return { id: b.id, part, boxes, bounds };
+  }).filter(Boolean) as any[];
 
-  // PHASE 1: Identify blocks directly supported by the floor
-  for (const b of blockBoxes) {
-     if (b.part.type === 'slope_inv') continue; // Inverse slopes lack bottom grip
-     for (const box of b.boxes) {
-        if (Math.abs(box.minY - (-0.5)) < EPSILON) {
-           supported.add(b.id);
-           break;
-        }
-     }
+  // 1. Find overall bounds for Octree
+  if (blockData.length === 0) return { supportedIds: new Set(), fallingIds: new Set() };
+  
+  const worldBounds = {
+    minX: Math.min(...blockData.map(d => d.bounds.minX)) - 1,
+    maxX: Math.max(...blockData.map(d => d.bounds.maxX)) + 1,
+    minY: -1,
+    maxY: Math.max(...blockData.map(d => d.bounds.maxY)) + 1,
+    minZ: Math.min(...blockData.map(d => d.bounds.minZ)) - 1,
+    maxZ: Math.max(...blockData.map(d => d.bounds.maxZ)) + 1
+  };
+
+  const tree = new Octree(worldBounds);
+  for (const b of blockData) tree.insert(b);
+
+  // 2. Identify grounded blocks
+  for (const b of blockData) {
+    if (b.part.type === 'slope_inv') continue;
+    for (const box of b.boxes) {
+      if (Math.abs(box.minY - (-0.5)) < EPSILON) {
+        supported.add(b.id);
+        break;
+      }
+    }
   }
 
-  // PHASE 2: Build a graph of physical connections between blocks
+  // 3. Connection mapping using Octree
   const edges = new Map<string, Set<string>>();
-  for (const b of blocks) edges.set(b.id, new Set());
+  for (const b of blockData) edges.set(b.id, new Set());
 
-  for (let i = 0; i < blockBoxes.length; i++) {
-     for (let j = i + 1; j < blockBoxes.length; j++) {
-        const b1 = blockBoxes[i];
-        const b2 = blockBoxes[j];
-        let connected = false;
+  const hasStudsOnTop = (type: string) => ['box', 'brick', 'plate', 'corner', 'cylinder', 'cone', 'slope_inv', 'jumper', 'jumper_round', 'slope_2studs'].includes(type);
+  const hasHolesOnBottom = (type: string) => ['box', 'brick', 'plate', 'corner', 'cylinder', 'slope', 'tile', 'jumper', 'jumper_round', 'cone', 'slope_inv', 'wedge_plate'].includes(type);
 
-        const hasStudsOnTop = (type: string) => ['box', 'brick', 'plate', 'corner', 'cylinder', 'cone', 'slope_inv'].includes(type);
-        const hasHolesOnBottom = (type: string) => ['box', 'brick', 'plate', 'corner', 'cylinder', 'slope', 'tile'].includes(type);
-
-        for (const box1 of b1.boxes) {
-           for (const box2 of b2.boxes) {
-              // Blocks must overlap in XZ plane to potentially connect
-              const overlapXZ = box1.minX < box2.maxX - EPSILON &&
-                                box1.maxX > box2.minX + EPSILON &&
-                                box1.minZ < box2.maxZ - EPSILON &&
-                                box1.maxZ > box2.minZ + EPSILON;
-
-              if (overlapXZ) {
-                 // Check vertical adjacency (stud-to-hole or hole-to-stud)
-                 // Case 1: b1 is on top of b2
-                 if (Math.abs(box1.minY - box2.maxY) < EPSILON) {
-                    if (hasStudsOnTop(b2.part?.type) && hasHolesOnBottom(b1.part?.type)) {
-                       connected = true;
-                    }
-                 }
-                 // Case 2: b2 is on top of b1
-                 if (Math.abs(box2.minY - box1.maxY) < EPSILON) {
-                    if (hasStudsOnTop(b1.part?.type) && hasHolesOnBottom(b2.part?.type)) {
-                       connected = true;
-                    }
-                 }
-              }
-           }
+  for (const b1 of blockData) {
+    // Check for support above b1
+    const queryRange = {
+      minX: b1.bounds.minX - EPSILON, 
+      maxX: b1.bounds.maxX + EPSILON,
+      minY: b1.bounds.maxY - EPSILON, 
+      maxY: b1.bounds.maxY + EPSILON * 2,
+      minZ: b1.bounds.minZ - EPSILON, 
+      maxZ: b1.bounds.maxZ + EPSILON
+    };
+    
+    const possibleAbove = tree.query(queryRange);
+    for (const b2 of possibleAbove) {
+      if (b1.id === b2.id) continue;
+      
+      let connected = false;
+      for (const box1 of b1.boxes) {
+        for (const box2 of b2.boxes) {
+          const overlapXZ = box1.minX < box2.maxX - EPSILON &&
+                            box1.maxX > box2.minX + EPSILON &&
+                            box1.minZ < box2.maxZ - EPSILON &&
+                            box1.maxZ > box2.minZ + EPSILON;
+          if (overlapXZ && Math.abs(box2.minY - box1.maxY) < EPSILON) {
+             if (hasStudsOnTop(b1.part.type) && hasHolesOnBottom(b2.part.type)) {
+                connected = true;
+                break;
+             }
+          }
         }
-        if (connected) {
-           edges.get(b1.id)?.add(b2.id);
-           edges.get(b2.id)?.add(b1.id);
-        }
-     }
+        if (connected) break;
+      }
+      
+      if (connected) {
+        edges.get(b1.id)?.add(b2.id);
+        edges.get(b2.id)?.add(b1.id);
+      }
+    }
   }
 
-  // PHASE 3: Propagate state from grounded blocks through the graph
-  let changed = true;
-  while (changed) {
-     changed = false;
-     for (const [id, neighbors] of edges.entries()) {
-        if (!supported.has(id)) {
-           for (const neighbor of neighbors) {
-              if (supported.has(neighbor)) {
-                 supported.add(id);
-                 changed = true;
-                 break;
-              }
-           }
+  // 4. Reachability propagation
+  const queue = Array.from(supported);
+  while (queue.length > 0) {
+    const currId = queue.shift()!;
+    const neighbors = edges.get(currId);
+    if (neighbors) {
+      for (const nextId of neighbors) {
+        if (!supported.has(nextId)) {
+          supported.add(nextId);
+          queue.push(nextId);
         }
-     }
+      }
+    }
   }
 
-  // PHASE 4: Result generation
   const fallingIds = new Set<string>();
   for (const b of blocks) {
-     if (!supported.has(b.id)) {
-        fallingIds.add(b.id);
-     }
+    if (!supported.has(b.id)) fallingIds.add(b.id);
   }
   
   return { supportedIds: supported, fallingIds };
@@ -1133,9 +964,8 @@ export function performStabilityCheck(blocks: any[], parts: typeof PARTS) {
  * Component for animating a group of falling blocks.
  * Uses useFrame for direct Three.js position/rotation updates to ensure high performance.
  */
-const SceneSettings = ({ isNightMode, showGrid }: { isNightMode: boolean, showGrid: boolean }) => {
+const SceneSettings = ({ isNightMode, intensity }: { isNightMode: boolean, intensity: number }) => {
   const { gl, scene } = useThree();
-  const intensityTarget = showGrid ? 0.05 : (isNightMode ? 0.45 : 1.8);
   
   useEffect(() => {
     const bgColor = isNightMode ? '#12121c' : '#f3f4f6';
@@ -1143,22 +973,22 @@ const SceneSettings = ({ isNightMode, showGrid }: { isNightMode: boolean, showGr
     scene.background = new THREE.Color(bgColor);
     
     if (scene) {
-       (scene as any).environmentIntensity = intensityTarget;
+       (scene as any).environmentIntensity = intensity;
        scene.traverse((obj: any) => {
           if (obj.isMesh && obj.material) {
              const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
              materials.forEach((m: any) => {
-                if (m.envMapIntensity !== undefined) m.envMapIntensity = intensityTarget;
+                if (m.envMapIntensity !== undefined) m.envMapIntensity = intensity;
              });
           }
        });
     }
-  }, [isNightMode, gl, scene, intensityTarget]);
+  }, [isNightMode, gl, scene, intensity]);
 
   // Lock environment intensity to prevent it being overwritten by Environment presets
   useFrame(() => {
-    if (scene && (scene as any).environmentIntensity !== intensityTarget) {
-      (scene as any).environmentIntensity = intensityTarget;
+    if (scene && (scene as any).environmentIntensity !== intensity) {
+      (scene as any).environmentIntensity = intensity;
     }
   });
 
@@ -1876,30 +1706,34 @@ const BatteriesGroup = React.memo(({ blocks, geometries, showEdges, selectedIds,
             }}
             onPointerEnter={(e) => {
               e.stopPropagation();
-              document.body.style.cursor = 'pointer';
+              if (mouseMode === 'interact') {
+                document.body.style.cursor = 'pointer';
+              }
             }}
             onPointerLeave={(e) => {
               e.stopPropagation();
-              document.body.style.cursor = 'auto';
+              if (mouseMode === 'interact') {
+                document.body.style.cursor = 'auto';
+              }
             }}
           >
             {/* Base (Bottom 2/3) - Black */}
-            <mesh position={[0, -0.166, 0]} castShadow>
-              <boxGeometry args={[1, 0.666, 1]} />
+            <mesh position={[0, -0.1, 0]} castShadow>
+              <boxGeometry args={[1, 0.4, 1]} />
               <meshStandardMaterial polygonOffset={true} polygonOffsetFactor={3} polygonOffsetUnits={3} color="#262626" roughness={0.4} metalness={0.8} roughnessMap={roughnessMap} normalMap={normalMap} normalScale={[0.8, 0.8]} onBeforeCompile={randomUVsOnCompile} />
             </mesh>
             
             {/* Top (Top 1/3) - Copper */}
-            <mesh position={[0, 0.333, 0]} castShadow>
-              <boxGeometry args={[1, 0.334, 1]} />
+            <mesh position={[0, 0.2, 0]} castShadow>
+              <boxGeometry args={[1, 0.2, 1]} />
               <meshStandardMaterial polygonOffset={true} polygonOffsetFactor={3} polygonOffsetUnits={3} color="#ffcca1" roughness={0.3} metalness={0.9} roughnessMap={roughnessMap} normalMap={normalMap} normalScale={[0.8, 0.8]} onBeforeCompile={randomUVsOnCompile} />
             </mesh>
 
             {/* Studs if desired - Copper */}
-            <group position={[0, 0.5, 0]}>
+            <group position={[0, 0.3, 0]}>
                { [[0.25, 0.25], [-0.25, 0.25], [0.25, -0.25], [-0.25, -0.25]].map((studPos, i) => (
-                  <mesh key={i} position={[studPos[0], 0.1, studPos[1]]} castShadow>
-                    <cylinderGeometry args={[0.15, 0.15, 0.2, 16]} />
+                  <mesh key={i} position={[studPos[0], STUD_HEIGHT/2, studPos[1]]} castShadow>
+                    <cylinderGeometry args={[STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16]} />
                     <meshStandardMaterial polygonOffset={true} polygonOffsetFactor={3} polygonOffsetUnits={3} color="#ffcca1" roughness={0.3} metalness={0.9} roughnessMap={roughnessMap} normalMap={normalMap} normalScale={[0.8, 0.8]} onBeforeCompile={randomUVsOnCompile} />
                   </mesh>
                ))}
@@ -1912,7 +1746,7 @@ const BatteriesGroup = React.memo(({ blocks, geometries, showEdges, selectedIds,
                  />
                </mesh>
             </group>
-            {isSelected && <mesh position={[0,0,0]}><boxGeometry args={[1.02, 1.02, 1.02]} /><meshBasicMaterial color="#4dabf7" wireframe transparent opacity={0.6} /></mesh>}
+            {isSelected && <mesh position={[0,0,0]}><boxGeometry args={[1.02, 0.62, 1.02]} /><meshBasicMaterial color="#4dabf7" wireframe transparent opacity={0.6} /></mesh>}
             {showEdges && batteryEdgesGeo && (
                <lineSegments raycast={() => null} geometry={batteryEdgesGeo}>
                   <lineBasicMaterial color="#000000" opacity={0.6} transparent depthTest={true} />
@@ -2219,6 +2053,11 @@ export default function App() {
   }, [isAudioReady]);
 
   const [isNightMode, setIsNightMode] = useState(false);
+  const [envIntensity, setEnvIntensity] = useState(1.0);
+
+  useEffect(() => {
+    setEnvIntensity(isNightMode ? 0.4 : 1.0);
+  }, [isNightMode]);
   const [showEdges, setShowEdges] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeCategory, setActiveCategory] = useState<'All' | 'Brick' | 'Plate' | 'Tile' | 'Round' | 'Special'>('All');
@@ -2341,7 +2180,7 @@ export default function App() {
         ghostPosRef.current = pos;
         
         // Update user-facing height via ref for performance (direct DOM update)
-        const displayHeight = pos[1] - currentPart.size[2] * 0.5 + 0.5;
+        const displayHeight = (pos[1] - currentPart.size[2] * GRID_UNIT_HEIGHT * 0.5 + 0.5) / GRID_UNIT_HEIGHT;
         if (hudHeightRef.current) {
            hudHeightRef.current.textContent = displayHeight.toFixed(2).replace(/\.00$/, '');
         }
@@ -2358,10 +2197,13 @@ export default function App() {
         const width = isRot ? currentPart.size[1] : currentPart.size[0];
         const depth = isRot ? currentPart.size[0] : currentPart.size[1];
 
+        const hw = width * GRID_UNIT_WIDTH * 0.5;
+        const hd = depth * GRID_UNIT_WIDTH * 0.5;
+
         // Ensure block is within the allowed 100x100x50 build cube
         const inBounds = 
-          pos[0] - width/2 >= -50 && pos[0] + width/2 <= 50 &&
-          pos[2] - depth/2 >= -50 && pos[2] + depth/2 <= 50 &&
+          pos[0] - hw >= -50 && pos[0] + hw <= 50 &&
+          pos[2] - hd >= -50 && pos[2] + hd <= 50 &&
           pos[1] <= 50;
 
         const hasCollision = blocksRef.current.some(b => {
@@ -2412,10 +2254,13 @@ export default function App() {
     const width = isRot ? currentPart.size[1] : currentPart.size[0];
     const depth = isRot ? currentPart.size[0] : currentPart.size[1];
 
+    const hw = width * GRID_UNIT_WIDTH * 0.5;
+    const hd = depth * GRID_UNIT_WIDTH * 0.5;
+
     // Strict boundary enforcement (64x64 stud area)
     const inBounds = 
-      pos[0] - width/2 >= -32 && pos[0] + width/2 <= 32 &&
-      pos[2] - depth/2 >= -32 && pos[2] + depth/2 <= 32 &&
+      pos[0] - hw >= -32 && pos[0] + hw <= 32 &&
+      pos[2] - hd >= -32 && pos[2] + hd <= 32 &&
       pos[1] <= 32;
 
     const hasCollision = blocks.some(b => {
@@ -2581,9 +2426,9 @@ COORDINATE SYSTEM:
 - World Space: X (left/right), Y (up/down), Z (front/back).
 - Floor Level: All models MUST start on the floor (y = -0.5 is the baseplate).
 - Vertical alignment (Y):
-  * Center of a Brick sitting on the floor: y = 0
-  * Center of a Plate sitting on the floor: y = -0.333
-  * Stacking: Add 1.0 to y for each brick layer. Add 0.333 to y for each plate layer.
+  * Center of a Brick sitting on the floor: y = -0.2 (world height 0.6)
+  * Center of a Plate sitting on the floor: y = -0.4 (world height 0.2)
+  * Stacking: Add 0.6 to y for each brick layer. Add 0.2 to y for each plate layer.
 - Horizontal alignment (X/Z): Use steps of 0.5.
 
 STRUCTURAL RULES:
@@ -2609,7 +2454,8 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
         generatedBlocks.forEach((b: any) => {
           if (b.position && typeof b.position[1] === 'number') {
             const isPlate = b.partId?.includes('plate') || b.partId?.includes('tile');
-            const bottom = b.position[1] - (isPlate ? 1/6 : 0.5);
+            const worldH = isPlate ? (PLATE_HEIGHT * GRID_UNIT_HEIGHT) : GRID_UNIT_HEIGHT;
+            const bottom = b.position[1] - (worldH / 2);
             if (bottom < minY) minY = bottom;
           }
         });
@@ -2741,7 +2587,6 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                { id: 'katalog', label: 'Bausteine', icon: Search },
                { id: 'logic', label: 'Logik', icon: Zap },
                { id: 'vorlagen', label: 'Library', icon: Info },
-               { id: 'ki', label: 'AI Builder', icon: Wind },
                { id: 'werkzeug', label: 'Settings', icon: Volume2 },
              ].map((tab) => (
                 <button 
@@ -2988,55 +2833,43 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
               </div>
             )}
 
-            {sidebarTab === 'ki' && (
-              <div className="space-y-6 animate-in fade-in duration-500">
-                <div className="p-8 rounded-[40px] bg-gray-900 shadow-2xl relative overflow-hidden group">
-                  <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity"><Wind size={140} /></div>
-                  <h3 className="text-[10px] uppercase tracking-[0.4em] font-black text-blue-400 mb-2">Neural Build</h3>
-                  <p className="text-[18px] font-black text-white tracking-tight leading-tight mb-8">What should the<br />algorithm construct?</p>
-                  
-                  <div className="space-y-6">
-                    <textarea 
-                       rows={4}
-                       placeholder="Explain your architectural intent..."
-                       value={aiPrompt}
-                       onChange={(e) => setAiPrompt(e.target.value)}
-                       className="w-full px-5 py-5 bg-white/5 border border-white/10 rounded-3xl text-xs font-medium text-white outline-none focus:ring-4 focus:ring-blue-500/20 placeholder:text-white/20 transition-all resize-none"
-                       disabled={isAiLoading}
-                    />
-                    
-                    <button 
-                      onClick={handleAiBuild}
-                      disabled={isAiLoading || !aiPrompt.trim()}
-                      className={`w-full py-5 rounded-[24px] text-[11px] font-black uppercase tracking-[0.2em] transition-all shadow-2xl ${isAiLoading ? 'bg-white/5 text-white/20 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-500 hover:scale-[1.02] active:scale-95 shadow-blue-900/50'}`}
-                    >
-                      {isAiLoading ? (
-                        <div className="flex items-center justify-center gap-3">
-                           <div className="w-2 h-2 bg-white/40 rounded-full animate-bounce [animation-delay:-0.3s]" />
-                           <div className="w-2 h-2 bg-white/40 rounded-full animate-bounce [animation-delay:-0.15s]" />
-                           <div className="w-2 h-2 bg-white/40 rounded-full animate-bounce" />
-                        </div>
-                      ) : 'Initiate Sequence'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
             {sidebarTab === 'info' && (
-              <div className="animate-in fade-in slide-in-from-left-2 duration-300 space-y-6">
+              <div className="animate-in fade-in slide-in-from-left-2 duration-300 space-y-6 pb-12">
                 <section>
-                   <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400 px-1 mb-4">Engine Info</h3>
+                   <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400 px-1 mb-4">Über Brickcraft</h3>
                    <div className="p-6 bg-gray-50 rounded-3xl space-y-4">
-                     <p className="text-[10px] text-gray-500 font-bold leading-relaxed">Brickcraft is a high-performance 3D construction engine powered by React and WebGL.</p>
-                     <div className="grid grid-cols-2 gap-2 text-[9px] font-black uppercase tracking-tighter">
-                       <div className="p-3 bg-white rounded-xl border border-gray-100">Blocks: {blocks.length}</div>
-                       <div className="p-3 bg-white rounded-xl border border-gray-100">Gravity: {gravityStrength}</div>
-                     </div>
+                     <p className="text-[11px] text-gray-600 font-medium leading-relaxed">
+                       Brickcraft ist ein experimenteller 3D-Baukasten für Browser, der die Ästhetik klassischer Klemmbausteine mit moderner Web-Technologie verbindet.
+                       Das Ziel ist ein intuitives, performantes System für Konstruktionen und Logik-Simulationen.
+                     </p>
+                     <p className="text-[10px] text-gray-400 leading-relaxed font-bold italic">
+                       Hinweis: Dies ist eine technische Demo. Alle Daten werden lokal in Ihrem Browser gespeichert.
+                     </p>
                    </div>
                 </section>
+
                 <section>
-                   <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400 px-1 mb-4 border-t border-gray-50 pt-6">Impressum & Lizenzen</h3>
+                   <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400 px-1 mb-4 border-t border-gray-50 pt-6">Impressum & Credits</h3>
+                   <div className="p-6 bg-gray-50 rounded-3xl space-y-4">
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-black text-gray-800 uppercase tracking-tight">Entwickelt von</p>
+                        <p className="text-[11px] text-gray-600">AI Studio Brickcraft Team</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-black text-gray-800 uppercase tracking-tight">Kontakt / Feedback</p>
+                        <p className="text-[11px] text-gray-600">NERV.PenPen@gmail.com</p>
+                      </div>
+                      <div className="pt-4 border-t border-gray-100">
+                        <p className="text-[9px] text-gray-400 font-medium leading-tight">
+                          Diese Anwendung wurde zu Demonstrationszwecken erstellt. 
+                          Alle Rechte an genutzten Software-Bibliotheken verbleiben bei den jeweiligen Autoren (siehe Lizenzen).
+                        </p>
+                      </div>
+                   </div>
+                </section>
+
+                <section>
+                   <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400 px-1 mb-4 border-t border-gray-50 pt-6">Lizenzen</h3>
                    <div className="space-y-2">
                      <LicenseItem 
                        title="React" 
@@ -3063,6 +2896,37 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                        license="Creative Commons" 
                        content={["Audio provided by ElevenLabs.", "https://elevenlabs.io/music/lofi", "", "All Lo-Fi beats and sound effects were synthesized using generative AI technologies for creative experimentation."].join('\n')}
                      />
+                   </div>
+                </section>
+
+                <section className="pt-10">
+                   <div className="p-6 bg-gray-900 rounded-[32px] shadow-2xl relative overflow-hidden group">
+                      <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity"><Wind size={80} /></div>
+                      <p className="text-[9px] text-blue-400 font-bold uppercase tracking-[0.3em] mb-4">Experimental Feature</p>
+                      <h3 className="text-sm font-black text-white mb-2">Neural Algorithm Build</h3>
+                      <p className="text-[10px] text-white/50 mb-6 leading-relaxed">
+                        Die KI-Konstruktion ist nun ein verstecktes Feature für fortgeschrittene Nutzer. 
+                        Beschreiben Sie Ihre Architektur-Idee in Kurzform.
+                      </p>
+                      
+                      <div className="space-y-4">
+                        <textarea 
+                           rows={3}
+                           placeholder="z.B. Ein roter Turm mit Glasfenstern..."
+                           value={aiPrompt}
+                           onChange={(e) => setAiPrompt(e.target.value)}
+                           className="w-full px-4 py-4 bg-white/5 border border-white/10 rounded-2xl text-[11px] font-medium text-white outline-none focus:ring-4 focus:ring-blue-500/20 placeholder:text-white/20 transition-all resize-none"
+                           disabled={isAiLoading}
+                        />
+                        
+                        <button 
+                          onClick={handleAiBuild}
+                          disabled={isAiLoading || !aiPrompt.trim()}
+                          className={`w-full py-4 rounded-xl text-[10px] font-black uppercase tracking-[0.1em] transition-all ${isAiLoading ? 'bg-white/5 text-white/20 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-500 active:scale-95'}`}
+                        >
+                          {isAiLoading ? 'Algorithmus läuft...' : 'Konstruktion starten'}
+                        </button>
+                      </div>
                    </div>
                 </section>
               </div>
@@ -3179,6 +3043,21 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                         <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isNightMode ? 'left-5' : 'left-1'}`} />
                      </button>
                    </div>
+                   <div className="p-3 bg-gray-50 rounded-2xl border border-gray-100 space-y-2">
+                      <div className="flex justify-between items-center">
+                         <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Umgebungslicht</span>
+                         <span className="text-[10px] font-mono font-bold text-blue-600">{envIntensity.toFixed(1)}</span>
+                      </div>
+                      <input 
+                         type="range"
+                         min="0.1"
+                         max="2.0"
+                         step="0.1"
+                         value={envIntensity}
+                         onChange={(e) => setEnvIntensity(parseFloat(e.target.value))}
+                         className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                      />
+                   </div>
                 </section>
 
                 <section>
@@ -3222,19 +3101,7 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
 
           </div>
           
-          {/* BOTTOM QUICK STATS */}
-          <div className="p-6 bg-gray-50/50 border-t border-gray-100 flex items-center justify-between">
-             <div className="flex gap-4">
-                <div className="text-center">
-                   <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Bricks</p>
-                   <p className="text-xs font-black text-gray-900">{blocks.length}</p>
-                </div>
-                <div className="h-4 w-[1px] bg-gray-200 mt-2" />
-                <div className="text-center">
-                   <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Height</p>
-                   <p className="text-xs font-black text-gray-900"><span ref={hudHeightRef}>0</span>u</p>
-                </div>
-             </div>
+          <div className="p-6 bg-gray-50/50 border-t border-gray-100 flex items-center justify-end">
              <button onClick={() => setSidebarTab('info')} className="p-2.5 bg-white border border-gray-100 rounded-xl text-gray-400 hover:text-blue-600 hover:border-blue-200 transition-all shadow-sm active:scale-95">
                 <Info size={16} />
              </button>
@@ -3254,7 +3121,12 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
               ].map(mode => (
                 <button
                   key={mode.id}
-                  onClick={() => setMouseMode(mode.id as any)}
+                  onClick={() => {
+                     setMouseMode(mode.id as any);
+                     if (mode.id !== 'select') {
+                       setSelectedIds([]);
+                     }
+                  }}
                   title={mode.label}
                   className={`w-12 h-12 flex flex-col items-center justify-center rounded-2xl transition-all duration-300 ${mouseMode === mode.id ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-100 hover:text-gray-800'}`}
                 >
@@ -3318,7 +3190,7 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                              <span className="text-[10px] uppercase font-bold text-gray-400">Farbe</span>
                              <div className="flex items-center gap-2">
                                <div className="w-3 h-3 rounded-full border border-gray-200" style={{ backgroundColor: sb.color }} />
-                               <span className="font-medium text-xs text-gray-800">{sc.name}</span>
+                               <span className="font-medium text-xs text-gray-800">{sc.name}</span> <span className="font-mono text-[9px] text-gray-400">({sb.color.toUpperCase()})</span>
                              </div>
                           </div>
                           <div className="flex justify-between items-end border-b border-gray-100 pb-2">
@@ -3452,7 +3324,7 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
           map={customEnvMap} 
           blur={showGrid ? 0.6 : 0}
         />
-        <SceneSettings isNightMode={isNightMode} showGrid={showGrid} />
+        <SceneSettings isNightMode={isNightMode} intensity={envIntensity} />
 
         {/* Baseplate / Floor Interaction Group */}
         <group
@@ -3636,9 +3508,9 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                 const dy = transformDummyRef.current.position.y - transformDummyRef.current.userData.initialPosition[1];
                 const dz = transformDummyRef.current.position.z - transformDummyRef.current.userData.initialPosition[2];
                 
-                const snappedDx = snapToGrid ? Math.round(dx / 0.5) * 0.5 : dx;
-                const snappedDy = snapToGrid ? Math.round(dy / PLATE_HEIGHT) * PLATE_HEIGHT : dy;
-                const snappedDz = snapToGrid ? Math.round(dz / 0.5) * 0.5 : dz;
+                const snappedDx = snapToGrid ? Math.round(dx / GRID_UNIT_WIDTH) * GRID_UNIT_WIDTH : dx;
+                const snappedDy = snapToGrid ? Math.round(dy / (PLATE_HEIGHT * GRID_UNIT_HEIGHT)) * (PLATE_HEIGHT * GRID_UNIT_HEIGHT) : dy;
+                const snappedDz = snapToGrid ? Math.round(dz / GRID_UNIT_WIDTH) * GRID_UNIT_WIDTH : dz;
                 
                 setTransformOffset([snappedDx, snappedDy, snappedDz]);
               }
@@ -3725,7 +3597,7 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
 
       {/* Tooltip / Status Footer */}
       <div className="absolute bottom-6 left-6 bg-[#ffffff] px-4 py-2 rounded-[20px] shadow-sm text-xs text-[#6b7280] border border-[#d1d5db] pointer-events-none flex items-center">
-        Position: {blocks.length > 0 ? blocks[blocks.length - 1].position.map((n: number) => n.toFixed(1)).join(', ') : '0, 0, 0'} &nbsp; | &nbsp; Bauteile: {blocks.length} &nbsp; | &nbsp; Raster: {snapToGrid ? '1' : 'Frei'}
+        Position: {blocks.length > 0 ? blocks[blocks.length - 1].position.map((n: number) => n.toFixed(1)).join(', ') : '0, 0, 0'} &nbsp; | &nbsp; Raster: {snapToGrid ? '1' : 'Frei'}
       </div>
       
       </div>

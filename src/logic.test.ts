@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { getGridPos, getCollisionBoxes, checkCollision, performStabilityCheck, PARTS, PART_MAP } from './App';
+import { getGridPos, getCollisionBoxes, checkCollision, PARTS, PART_MAP } from './parts';
+import { performStabilityCheck } from './App';
 
 describe('Brickcraft Build Logic', () => {
   it('getGridPos should snap positions to the grid correctly with rotation', () => {
