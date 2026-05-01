@@ -27,6 +27,12 @@ export const TEMPLATES = [
     path: '/templates/raumschiff.txt'
   },
   {
+    id: 'lighthouse',
+    name: 'Lighthouse',
+    description: 'Neuer, detaillierter Turmbau',
+    path: '/templates/lighthouse.txt'
+  },
+  {
     id: 'dino',
     name: 'Titan-Rex 3D',
     description: 'Massiver Saurierbau',
