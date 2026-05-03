@@ -9,6 +9,11 @@ import { GoogleGenAI } from "@google/genai";
 
 import { Volume2, VolumeX, Music, Wind, Search, Info, ExternalLink, ChevronDown, ChevronUp, Zap, Hand, MousePointer2, Hammer, Paintbrush, Undo2, Redo2, X } from 'lucide-react';
 import { COLORS, COLOR_MAP, PLATE_HEIGHT, BRICK_HEIGHT, GRID_UNIT_WIDTH, GRID_UNIT_HEIGHT, STUD_HEIGHT, STUD_RADIUS, PARTS, PART_MAP, getGridPos, normalizePos, getCollisionBoxes, checkCollision } from './parts';
+import { tdEngine } from './tdEngine';
+import { extractVoxelGrid, TDPathfinder } from './tdPathfinding';
+import { TdSimulation } from './tdSimulation';
+import { CrystalGeometry } from './CrystalGeometry';
+import { CrystalGeometryV2 } from './CrystalGeometryV2';
 
 const AudioEngine = {
   ctx: null as AudioContext | null,
@@ -136,6 +141,34 @@ const AudioEngine = {
     g.connect(this.sfxGain);
     osc.start(t);
     osc.stop(t + 0.08);
+  },
+
+  playShot(damage: number) {
+    if (!this.isInitialized || !this.ctx || !this.sfxGain) return;
+    const t = this.ctx.currentTime + 0.01;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+
+    if (damage >= 100) {
+      // Heavy cannon - very deep sound
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(80, t);
+      osc.frequency.exponentialRampToValueAtTime(30, t + 0.15);
+      g.gain.setValueAtTime(0.3, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+    } else {
+      // Rapid shredder - lighter pop
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(300, t);
+      osc.frequency.exponentialRampToValueAtTime(120, t + 0.05);
+      g.gain.setValueAtTime(0.1, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+    }
+
+    osc.connect(g);
+    g.connect(this.sfxGain);
+    osc.start(t);
+    osc.stop(t + 0.2);
   },
 
   setSfxVolume(v: number) { 
@@ -608,6 +641,17 @@ function useBrickGeometries() {
             studGeo.translate(0, hActual/2 - thickness/2, 0);
             visualParts.push(studGeo);
          }
+      } else if (part.type === 'crystal') {
+         // Generate base tile at the bottom (scaled by 2, so height is 2 plates)
+         const baseH = PLATE_HEIGHT * GRID_UNIT_HEIGHT * 2; // 0.4
+         const baseRadius = wActual / 2 * 0.8; // ~0.4 for 2x2
+         
+         const boxGeo = new THREE.CylinderGeometry(baseRadius, baseRadius, baseH, 16);
+         boxGeo.translate(0, -hActual/2 + baseH/2, 0);
+         visualParts.push(boxGeo);
+         edgeParts.push(boxGeo);
+
+         // No studs since it's a round tile base
       } else if (part.type === 'cone') {
          const cyl = new THREE.CylinderGeometry(0.22, wActual / 2, hActual, 32); 
          visualParts.push(cyl);
@@ -896,7 +940,7 @@ export function performStabilityCheck(blocks: any[], parts: any) {
   for (const b of blockData) edges.set(b.id, new Set());
 
   const hasStudsOnTop = (type: string) => ['box', 'brick', 'plate', 'corner', 'cylinder', 'cone', 'slope_inv', 'jumper', 'jumper_round', 'slope_2studs'].includes(type);
-  const hasHolesOnBottom = (type: string) => ['box', 'brick', 'plate', 'corner', 'cylinder', 'slope', 'tile', 'jumper', 'jumper_round', 'cone', 'slope_inv', 'wedge_plate'].includes(type);
+  const hasHolesOnBottom = (type: string) => ['box', 'brick', 'plate', 'corner', 'cylinder', 'slope', 'tile', 'jumper', 'jumper_round', 'cone', 'slope_inv', 'wedge_plate', 'crystal'].includes(type);
 
   for (const b1 of blockData) {
     // Check for support above b1
@@ -1169,13 +1213,15 @@ const InstancedBlocksGroup = React.memo(({
   blocks, geometries, showEdges, addBlock, removeBlock, updateGhost, 
   snapToGrid, currentRotation, isDrag, currentPart, pointerDownPos,
   selectedIds, onSelect, isCtrlPressed, isShiftPressed, logicState, toggleBlockMeta, transformOffset,
-  mouseMode, currentColor, updateBlockColor
+  mouseMode, currentColor, updateBlockColor, gameMode
 }: any) => {
   const blocksByMaterial = useMemo(() => {
     const map = new Map<string, { partId: string, list: any[], materialProps: any }>();
     
     blocks.forEach((b: any) => {
       if (b.partId === 'logic_battery') return; // rendering separately
+      if (b.partId === 'logic_td_spawn' || b.partId === 'logic_td_crystal' || b.partId === 'logic_td_crystal_v2' || b.partId === 'logic_td_tower_rapid' || b.partId === 'logic_td_tower_heavy') return;
+
       let colorMeta = (COLOR_MAP.get(b.color) || { value: b.color }) as any;
       
       let isTranslucent = b.material === 'trans' || (b.material === undefined && colorMeta.isTranslucent);
@@ -1262,6 +1308,7 @@ const InstancedBlocksGroup = React.memo(({
            mouseMode={mouseMode}
            currentColor={currentColor}
            updateBlockColor={updateBlockColor}
+           gameMode={gameMode}
         />
       ))}
     </>
@@ -1358,7 +1405,8 @@ const InstancedPart = ({
   mouseMode,
   currentColor,
   updateBlockColor,
-  showEdges
+  showEdges,
+  gameMode
 }: any) => {
   const geoData = geometries[partId] || geometries['brick_2x2'];
   const meshRef = useRef<THREE.InstancedMesh>(null);
@@ -1475,7 +1523,7 @@ const InstancedPart = ({
     }
     
     if (type === 'move') {
-       if (gridPos && mouseMode === 'build') {
+       if (gridPos && mouseMode === 'build' && gameMode === 'build') {
          updateGhost(true, gridPos);
        } else {
          updateGhost(false);
@@ -1485,6 +1533,8 @@ const InstancedPart = ({
 
     const dragging = isDrag(e);
     if (dragging) return;
+    
+    if (gameMode !== 'build') return;
 
     // RIGHT CLICK
     if (type === 'context') {
@@ -1667,7 +1717,7 @@ const FallingSparks = ({ position, color = "#ffaa55" }: any) => {
   );
 };
 
-const BatteriesGroup = React.memo(({ blocks, geometries, showEdges, selectedIds, transformOffset, toggleBlockMeta, mouseMode, onSelect, isDrag, removeBlock }: any) => {
+const BatteriesGroup = React.memo(({ blocks, geometries, showEdges, selectedIds, transformOffset, toggleBlockMeta, mouseMode, onSelect, isDrag, removeBlock, gameMode }: any) => {
   const batteryBlocks = blocks.filter((b: any) => b.partId === 'logic_battery');
   
   const batteryEdgesGeo = useMemo(() => {
@@ -1694,6 +1744,7 @@ const BatteriesGroup = React.memo(({ blocks, geometries, showEdges, selectedIds,
             onPointerUp={(e) => {
               e.stopPropagation();
               if (isDrag(e)) return;
+              if (gameMode !== 'build') return;
               if (e.button === 2 && removeBlock) {
                  removeBlock(b.id);
                  return;
@@ -1759,8 +1810,32 @@ const BatteriesGroup = React.memo(({ blocks, geometries, showEdges, selectedIds,
   );
 });
 
+const calculateAvailableBudget = (blocks: any[]) => {
+  const sumCost = blocks.reduce((acc, b) => {
+    const cost = (PARTS.find(p => p.id === b.partId) as any)?.cost || 0;
+    return acc + cost;
+  }, 0);
+  return 300 + tdEngine.earnedBudget - sumCost;
+};
+
+/**
+ * `App` forms the primary React container orchestrating the entire experience.
+ * 
+ * Responsibilities include:
+ * - Managing overall Block (voxel) state (`blocks`).
+ * - Managing Game Mode toggle (`build` vs. `play`).
+ * - Generating and caching procedural Three.js `BufferGeometry` for the brick shapes.
+ * - Implementing the pointer Raytracing for user interactions (drag, drop, delete blocks).
+ * - Implementing Audio and Post-Processing effects.
+ * - Displaying the Floating UI for Parts, Color Selection, and Statistics.
+ */
 export default function App() {
   const [blocks, setBlocks] = useState<any[]>([]);
+  const [gameMode, setGameMode] = useState<'build' | 'play'>('build');
+  const [tdTicks, setTdTicks] = useState(0);
+  const [crystalHp, setCrystalHp] = useState(20);
+  const [budget, setBudget] = useState(300);
+  const [wave, setWave] = useState(1);
   const historyRef = useRef<any[][]>([[]]);
   const historyIndexRef = useRef(0);
   
@@ -1773,18 +1848,20 @@ export default function App() {
   }, []);
 
   const undo = useCallback(() => {
+    if (gameMode !== 'build') return;
     if (historyIndexRef.current > 0) {
       historyIndexRef.current -= 1;
       setBlocks(historyRef.current[historyIndexRef.current]);
     }
-  }, []);
+  }, [gameMode]);
 
   const redo = useCallback(() => {
+    if (gameMode !== 'build') return;
     if (historyIndexRef.current < historyRef.current.length - 1) {
       historyIndexRef.current += 1;
       setBlocks(historyRef.current[historyIndexRef.current]);
     }
-  }, []);
+  }, [gameMode]);
 
   /**
    * Loads a complete pre-defined template into the workspace.
@@ -2069,6 +2146,150 @@ export default function App() {
   const [isShiftActive, setIsShiftActive] = useState(false);
   const [currentHeight, setCurrentHeight] = useState(0);
 
+  useEffect(() => {
+    tdEngine.onGameOver = () => {
+        AudioEngine.playPop();
+        setSimulationMessage({ text: 'GAME OVER! Kristall vernichtet.', type: 'error' });
+        
+        // Asynchrone Explosion
+        setTimeout(() => {
+           const allBlocks = blocksRef.current;
+           if (allBlocks.length === 0) return;
+
+           let center = new THREE.Vector3();
+           const crystal = allBlocks.find(b => b.partId === 'logic_td_crystal' || b.partId === 'logic_td_crystal_v2');
+           if (crystal) {
+               const p = normalizePos(crystal.position);
+               center.set(p[0], p[1], p[2]);
+           } else {
+               let validPoints = 0;
+               allBlocks.forEach(b => {
+                 const p = normalizePos(b.position);
+                 if (!isNaN(p[0]) && !isNaN(p[1]) && !isNaN(p[2])) {
+                    center.add(new THREE.Vector3(p[0], p[1], p[2]));
+                    validPoints++;
+                 }
+               });
+               if (validPoints > 0) center.divideScalar(validPoints);
+           }
+
+           const fallingBlocksWithVectors = allBlocks.map(b => {
+             const p = normalizePos(b.position);
+             const pos = new THREE.Vector3(p[0], p[1], p[2]);
+             const dir = new THREE.Vector3().subVectors(pos, center);
+             if (dir.lengthSq() < 0.0001 || isNaN(dir.x)) {
+                dir.set(Math.random() - 0.5, 0.5 + Math.random(), Math.random() - 0.5);
+             }
+             const nDir = dir.normalize();
+             return { ...b, vector: [nDir.x, nDir.y, nDir.z] };
+           });
+
+           updateBlocks([]);
+           setFallingGroups(prev => [...prev, { id: Math.random().toString(), blocks: fallingBlocksWithVectors, mode: 'explosion', strength: 15 }]);
+        }, 50);
+    };
+
+    tdEngine.onWaveComplete = () => {
+        setGameMode('build');
+        setWave(tdEngine.wave);
+        setSimulationMessage({ text: `Welle ${tdEngine.wave - 1} überlebt! Klicke 'Play' für Welle ${tdEngine.wave}.`, type: 'success' });
+    };
+
+    tdEngine.onBudgetChange = () => {
+        setBudget(calculateAvailableBudget(blocksRef.current));
+    };
+
+    return tdEngine.subscribe((ticks) => {
+      setTdTicks(ticks);
+      setCrystalHp(tdEngine.crystalHp);
+    });
+  }, []);
+
+  useEffect(() => {
+      setBudget(calculateAvailableBudget(blocks));
+  }, [blocks]);
+
+  useEffect(() => {
+    if (simulationMessage) {
+       const timer = setTimeout(() => {
+          setSimulationMessage(null);
+       }, 5000);
+       return () => clearTimeout(timer);
+    }
+  }, [simulationMessage]);
+
+  const handleTogglePlay = useCallback(() => {
+    if (gameMode === 'build') {
+      try {
+        const spanwers = blocksRef.current.filter(b => b.partId === 'logic_td_spawn');
+        const crystals = blocksRef.current.filter(b => b.partId === 'logic_td_crystal' || b.partId === 'logic_td_crystal_v2');
+
+        if (spanwers.length !== 1 || crystals.length !== 1) {
+          setSimulationMessage({ text: 'Exakt 1 Gegner-Spawn und 1 Energie-Kristall werden benötigt!', type: 'error' });
+          return;
+        }
+
+        const grid = extractVoxelGrid(blocksRef.current, PART_MAP);
+        if (!grid) throw new Error("No Grid generated");
+
+        const pf = new TDPathfinder(grid);
+        
+        // Find path
+        const spawnPos = normalizePos(spanwers[0].position);
+        const crystalPos = normalizePos(crystals[0].position);
+
+        const spawnBoxes = getCollisionBoxes(spanwers[0].position, PART_MAP.get(spanwers[0].partId), spanwers[0].rotation);
+        const crystalBoxes = getCollisionBoxes(crystals[0].position, PART_MAP.get(crystals[0].partId), crystals[0].rotation);
+
+        const startNode = {
+          x: Math.floor((spawnPos[0] + 0.001) / 0.5),
+          y: Math.floor((spawnBoxes[0].minY - (-0.5) + 0.001) / 0.2),
+          z: Math.floor((spawnPos[2] + 0.001) / 0.5),
+        };
+        const endNode = {
+          x: Math.floor((crystalPos[0] + 0.001) / 0.5),
+          y: Math.floor((crystalBoxes[0].minY - (-0.5) + 0.001) / 0.2),
+          z: Math.floor((crystalPos[2] + 0.001) / 0.5),
+        };
+
+        const path = pf.findPath(startNode, endNode, { maxClimbHeight: 1, clearanceHeight: 3 });
+
+        if (!path || path.length === 0) {
+            setSimulationMessage({ text: '⚠️ Kein Pfad zum Kristall gefunden!', type: 'error' });
+            return;
+        }
+        
+        tdEngine.setPath(path);
+        
+        tdEngine.softReset();
+
+        // Pass the towers to the engine
+        tdEngine.setTowers(blocksRef.current, (pos, partId) => {
+            const worldArr = normalizePos(pos);
+            return { x: worldArr[0], y: worldArr[1], z: worldArr[2] };
+        });
+
+        tdEngine.onShotFired = (damage: number, x: number, z: number) => {
+             if (sfxEnabled) AudioEngine.playShot(damage);
+             // Dispatch a custom event attached to window to trigger recoil
+             window.dispatchEvent(new CustomEvent('td-tower-recoil', { detail: { x, z } }));
+        };
+
+        if (sfxEnabled) AudioEngine.playPop();
+        setGameMode('play');
+        setSimulationMessage({ text: 'Game Mode: PLAY', type: 'success' });
+      } catch (e) {
+        console.error(e);
+        setSimulationMessage({ text: 'Fehler beim Wegfinden', type: 'error' });
+      }
+    } else {
+      tdEngine.softReset();
+      if (sfxEnabled) AudioEngine.playPop();
+      setGameMode('build');
+      setSimulationMessage({ text: 'Game Mode: BUILD', type: 'warning' });
+    }
+  }, [gameMode]);
+
   const filteredParts = useMemo(() => {
     return PARTS.filter(p => {
       const isLogic = p.id.startsWith('logic_');
@@ -2216,12 +2437,30 @@ export default function App() {
         
         lastValidRef.current = nextValid;
         setIsValidPlacement(nextValid); // Keep state for internal use if needed
-        if (ghostMaterialRef.current) {
-           let previewColor = currentColor;
-           if (currentPartId === 'logic_wire') previewColor = '#262626';
-           if (currentPartId === 'logic_battery') previewColor = '#262626';
+        
+        let previewColor = currentColor;
+        if (currentPartId === 'logic_wire') previewColor = '#262626';
+        if (currentPartId === 'logic_battery') previewColor = '#262626';
+        const baseColor = nextValid ? previewColor : '#ff0000';
 
-           const baseColor = nextValid ? previewColor : '#ff0000';
+        ghostRef.current.traverse((child: any) => {
+           if (child.isMesh && child.material && child.material.type !== 'LineBasicMaterial') {
+               const mat = child.material;
+               if (mat.color && mat.color.set) mat.color.set(baseColor);
+               mat.opacity = nextValid ? 0.5 : 0.8;
+               if (mat.emissive && mat.emissive.set) {
+                   if (isNightMode) {
+                      mat.emissive.set(nextValid ? previewColor : '#330000');
+                      mat.emissiveIntensity = nextValid ? 0.8 : 1.0;
+                   } else {
+                      mat.emissive.set(nextValid ? '#000000' : '#ff0000');
+                      mat.emissiveIntensity = nextValid ? 0.2 : 4.0;
+                   }
+               }
+           }
+        });
+
+        if (ghostMaterialRef.current) {
            ghostMaterialRef.current.color.set(baseColor);
            ghostMaterialRef.current.opacity = nextValid ? 0.5 : 0.8;
            if (isNightMode) {
@@ -2250,6 +2489,13 @@ export default function App() {
    * Finalizes the placement of a new block into the world state.
    */
   const addBlock = (pos: number[]) => {
+    if (gameMode !== 'build') return;
+    const cost = (currentPart as any).cost || 0;
+    if (budget < cost) {
+      setSimulationMessage({ text: 'Nicht genug Budget!', type: 'error' });
+      return;
+    }
+
     const isRot = currentRotation % 2 !== 0;
     const width = isRot ? currentPart.size[1] : currentPart.size[0];
     const depth = isRot ? currentPart.size[0] : currentPart.size[1];
@@ -2288,6 +2534,7 @@ export default function App() {
   };
 
   const removeBlock = (id: string) => {
+    if (gameMode !== 'build') return;
     AudioEngine.playPop();
     setBlocks(prev => {
       const next = prev.filter(b => b.id !== id);
@@ -2303,6 +2550,7 @@ export default function App() {
   };
 
   const updateBlockColor = useCallback((id: string, color: string) => {
+    if (gameMode !== 'build') return;
     AudioEngine.playClick();
     setBlocks(prev => {
       const next = prev.map(b => {
@@ -2318,7 +2566,7 @@ export default function App() {
       historyIndexRef.current = newHistory.length - 1;
       return next;
     });
-  }, []);
+  }, [gameMode]);
 
   const toggleBlockMeta = useCallback((id: string, key: string) => {
     AudioEngine.playClick();
@@ -2591,7 +2839,10 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
              ].map((tab) => (
                 <button 
                    key={tab.id}
-                   onClick={() => setSidebarTab(tab.id as any)}
+                   onClick={() => {
+                      setSidebarTab(tab.id as any);
+                      if (tab.id === 'logic') setMouseMode('build');
+                   }}
                    className={`flex items-center gap-2 px-4 py-1.5 text-[10px] font-black rounded-lg transition-all uppercase tracking-tight ${sidebarTab === tab.id ? 'bg-white shadow-md text-blue-600 outline-none' : 'text-gray-500 hover:text-gray-700'}`}
                 >
                    <tab.icon size={12} />
@@ -2603,18 +2854,25 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
 
         <div className="flex items-center gap-4">
           <div className="flex bg-gray-100 p-1 rounded-xl">
-             <button onClick={undo} title="Undo (Ctrl+Z)" className="p-2 hover:bg-white hover:shadow-sm rounded-lg text-gray-500 transition-all active:scale-90"><Undo2 size={16} /></button>
-             <button onClick={redo} title="Redo (Ctrl+Y)" className="p-2 hover:bg-white hover:shadow-sm rounded-lg text-gray-500 transition-all active:scale-90"><Redo2 size={16} /></button>
+             <button onClick={undo} disabled={gameMode === 'play'} title="Undo (Ctrl+Z)" className={`p-2 rounded-lg text-gray-500 transition-all ${gameMode === 'play' ? 'opacity-30 cursor-not-allowed' : 'hover:bg-white hover:shadow-sm active:scale-90'}`}><Undo2 size={16} /></button>
+             <button onClick={redo} disabled={gameMode === 'play'} title="Redo (Ctrl+Y)" className={`p-2 rounded-lg text-gray-500 transition-all ${gameMode === 'play' ? 'opacity-30 cursor-not-allowed' : 'hover:bg-white hover:shadow-sm active:scale-90'}`}><Redo2 size={16} /></button>
           </div>
           
           <div className="h-6 w-[1px] bg-gray-200" />
 
+          {gameMode === 'play' && (
+             <div className="flex bg-gray-100 p-1 rounded-xl items-center text-[10px] font-black uppercase tracking-widest text-gray-500 px-3">
+               TD Ticks: {tdTicks}
+             </div>
+          )}
+
           <button 
-             onClick={handleSave}
-             className="px-4 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-xl shadow-blue-100 active:scale-95 flex items-center gap-2"
+             onClick={handleTogglePlay}
+             className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-xl active:scale-95 flex items-center gap-2 ${gameMode === 'play' ? 'bg-red-600 text-white shadow-red-100 hover:bg-red-700' : 'bg-green-600 text-white shadow-green-100 hover:bg-green-700'}`}
           >
-             Export <ExternalLink size={12} />
+             {gameMode === 'play' ? 'Stop' : 'Play'}
           </button>
+
         </div>
       </header>
 
@@ -2738,10 +2996,10 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
             )}
 
             {sidebarTab === 'logic' && (
-              <div className="space-y-6 animate-in fade-in slide-in-from-left-2 duration-500">
+              <div className="space-y-8 animate-in fade-in slide-in-from-left-2 duration-500">
                  <section>
-                     <div className="space-y-4 mb-6 px-1">
-                      <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400">Logik Bausteine</h3>
+                    <div className="space-y-4 mb-6 px-1">
+                      <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400">Basic Logik</h3>
                       <p className="text-xs text-gray-500">Logiksteine funktionieren wie Redstone. Kabel verbinden Komponenten, die Batterie liefert Strom und LEDs leuchten wenn sie Strom erhalten. Die Stromreichweite der Batterie und Kabel ist komplett unbegrenzt. Klicke (mit Interaktionswerkzeug) auf die Batterie, um sie ein- oder auszuschalten.</p>
                    </div>
                    <div className="grid grid-cols-2 gap-3">
@@ -2767,6 +3025,50 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                                 <p className={`text-[10px] font-black leading-none uppercase tracking-tighter ${currentPartId === p.id ? 'text-blue-700' : 'text-gray-800'}`}>
                                    {p.label}
                                 </p>
+                             </div>
+                          </button>
+                         );
+                      })}
+                   </div>
+                 </section>
+
+                 <section>
+                     <div className="space-y-4 mb-6 px-1">
+                      <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400">Tower Defense Logik</h3>
+                      <p className="text-xs text-gray-500">Kombiniere Spawn, Kristall und Türme, um dein eigenes Level zu bauen. Klicke auf Play, um die Simulation zu starten!</p>
+                   </div>
+                   <div className="grid grid-cols-2 gap-3">
+                      {['logic_td_spawn', 'logic_td_crystal', 'logic_td_crystal_v2', 'logic_td_tower_rapid', 'logic_td_tower_heavy'].map(partId => {
+                         const p = PARTS.find(part => part.id === partId);
+                         if (!p) return null;
+                         return (
+                          <button 
+                             key={p.id}
+                             onClick={() => {
+                               setCurrentPartId(p.id);
+                               if (p.id === 'logic_td_crystal' || p.id === 'logic_td_crystal_v2') {
+                                 setCurrentColor('#AEE9EF');
+                                 setCurrentMaterial('trans');
+                               }
+                               if (sfxEnabled) AudioEngine.playClick();
+                             }}
+                             className={`group flex flex-col items-center gap-3 p-4 border rounded-3xl transition-all duration-500
+                               ${currentPartId === p.id 
+                                 ? 'border-blue-600 bg-blue-50/30 shadow-xl shadow-blue-900/5 ring-1 ring-blue-600 scale-[1.02]' 
+                                 : 'border-gray-100 bg-white hover:border-blue-200 hover:bg-blue-50/10'}`}
+                          >
+                             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-300 ${currentPartId === p.id ? 'bg-blue-600 text-white shadow-xl' : 'bg-gray-50 text-gray-300 group-hover:bg-blue-100 group-hover:text-blue-500'}`}>
+                                <Zap size={20} />
+                             </div>
+                             <div className="text-center">
+                                <p className={`text-[10px] font-black leading-none uppercase tracking-tighter ${currentPartId === p.id ? 'text-blue-700' : 'text-gray-800'}`}>
+                                   {p.label}
+                                </p>
+                                {(p as any).cost ? (
+                                    <p className={`text-[9px] font-medium mt-1 ${currentPartId === p.id ? 'text-blue-600/80' : 'text-gray-400'}`}>
+                                        {(p as any).cost} 💰
+                                    </p>
+                                ) : null}
                              </div>
                           </button>
                          )
@@ -3111,6 +3413,49 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
         {/* Center: Canvas Area */}
         <section className="flex-1 relative bg-gray-100 overflow-hidden">
            
+           {/* GAME OVERLAY / HUD */}
+           {(sidebarTab === 'logic' || gameMode === 'play') && (
+           <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 flex items-center justify-center p-2 px-4 bg-white/90 backdrop-blur-xl border border-gray-100 rounded-3xl shadow-xl min-w-[300px]">
+               <div className="flex w-full items-center justify-between gap-6 px-2">
+                 
+                 <div className="flex flex-col items-center">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-blue-500 mb-1">Budget</span>
+                    <span className="text-2xl font-black text-gray-900">{budget} 💰</span>
+                 </div>
+
+                 <div className="flex flex-col items-center">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-indigo-500 mb-1">Status</span>
+                    {crystalHp <= 0 ? (
+                        <div className="flex flex-col items-center">
+                             <span className="text-xl font-black text-red-500 animate-pulse">Zerstört</span>
+                             <button onClick={() => window.location.reload()} className="mt-1 px-3 py-1 bg-red-600 text-white rounded-full text-[10px] font-bold uppercase tracking-wider hover:bg-red-700">Neustart</button>
+                        </div>
+                    ) : (
+                        <span className="text-xl font-black text-gray-800">
+                          {gameMode === 'build' ? `Welle ${wave} (Pause)` : `Welle ${wave}`}
+                        </span>
+                    )}
+                 </div>
+
+                 <div className="flex flex-col items-center">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-orange-500 mb-1">Gegner</span>
+                    <span className="text-xl font-black text-gray-800">
+                      {10 * wave}
+                    </span>
+                 </div>
+
+                 <div className="flex flex-col items-center">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1">Kristall</span>
+                    <div className="flex items-end gap-1">
+                      <span className={`text-2xl font-black ${crystalHp <= 5 ? 'text-red-500 animate-pulse' : 'text-gray-900'}`}>{crystalHp > 0 ? crystalHp : 0}</span>
+                      <span className="text-gray-400 font-bold mb-1">/ 20</span>
+                    </div>
+                 </div>
+
+               </div>
+           </div>
+           )}
+
            {/* MOUSE MODE MENÜ */}
            <div className="absolute left-6 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2 p-2 bg-white/80 backdrop-blur-xl border border-gray-100 rounded-3xl shadow-xl shadow-gray-200/50">
               {[
@@ -3122,13 +3467,15 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                 <button
                   key={mode.id}
                   onClick={() => {
+                     if (gameMode === 'play') return;
                      setMouseMode(mode.id as any);
                      if (mode.id !== 'select') {
                        setSelectedIds([]);
                      }
                   }}
+                  disabled={gameMode === 'play'}
                   title={mode.label}
-                  className={`w-12 h-12 flex flex-col items-center justify-center rounded-2xl transition-all duration-300 ${mouseMode === mode.id ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-100 hover:text-gray-800'}`}
+                  className={`w-12 h-12 flex flex-col items-center justify-center rounded-2xl transition-all duration-300 ${mouseMode === mode.id ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-100 hover:text-gray-800'} ${gameMode === 'play' ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   <mode.icon size={20} />
                 </button>
@@ -3251,7 +3598,7 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
         }}
         onPointerUp={(e) => {
            // Handle placement on "empty" space if height lock is active
-           if (e.button === 0 && shiftState.current.active && !isDrag(e) && mouseMode === 'build') {
+           if (e.button === 0 && shiftState.current.active && !isDrag(e) && mouseMode === 'build' && gameMode === 'build') {
               addBlock(ghostPosRef.current);
            }
         }}
@@ -3341,6 +3688,7 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                return;
             }
             if ((window as any)._shiftIsActive) return;
+            if (gameMode !== 'build') return;
             if (e.button === 0) {
               if (mouseMode === 'build') {
                  const n = new THREE.Vector3(0, 1, 0);
@@ -3419,6 +3767,15 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
         </group>
 
         {/* The World Content: Bricks being rendered using efficient instancing */}
+        <TdSimulation 
+           gameMode={gameMode} 
+           blocks={blocks} 
+           geometries={geometries} 
+           removeBlock={removeBlock}
+           isDrag={isDrag}
+           pointerDownPos={pointerDownPos}
+        />
+
         <InstancedBlocksGroup 
           blocks={blocks}
           geometries={geometries}
@@ -3441,6 +3798,7 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
           mouseMode={mouseMode}
           currentColor={currentColor}
           updateBlockColor={updateBlockColor}
+          gameMode={gameMode}
         />
 
         <BatteriesGroup 
@@ -3454,6 +3812,7 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
            onSelect={setSelectedIds}
            isDrag={isDrag}
            removeBlock={removeBlock}
+           gameMode={gameMode}
         />
 
         {selectedIds.length > 0 && (
@@ -3529,28 +3888,34 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
         ))}
 
         {/* Ghost Block along with Footprint Shadow */}
-        {geometries[currentPartId] && (
+        {(geometries[currentPartId] || currentPartId === 'logic_td_crystal' || currentPartId === 'logic_td_crystal_v2') && (
           <group ref={ghostRef} visible={false}>
-            <mesh geometry={geometries[currentPartId].visual} raycast={() => null}>
-               <meshPhysicalMaterial 
-                  ref={ghostMaterialRef}
-                  color={currentColor}
-                  transparent 
-                  opacity={0.5}
-                  roughness={0.4}
-                  roughnessMap={roughnessMap}
-                  normalMap={normalMap}
-                  normalScale={[0.1, 0.1]}
-                  depthWrite={false}
-                  emissive={isNightMode ? currentColor : '#000000'}
-                  emissiveIntensity={isNightMode ? 0.8 : 0.2}
-                  toneMapped={!PART_MAP.get(currentPartId)?.id?.includes('logic')}
-               />
-               <lineSegments raycast={() => null}>
-                  <edgesGeometry args={[geometries[currentPartId].edges || geometries[currentPartId].visual]} />
-                  <lineBasicMaterial ref={ghostEdgesRef} color={isNightMode ? "#888888" : "black"} opacity={0.3} transparent depthTest={true} />
-               </lineSegments>
-            </mesh>
+            {currentPartId === 'logic_td_crystal' ? (
+                <CrystalGeometry color={currentColor} />
+            ) : currentPartId === 'logic_td_crystal_v2' ? (
+                <CrystalGeometryV2 color={currentColor} />
+            ) : (
+                <mesh geometry={geometries[currentPartId]?.visual} raycast={() => null}>
+                   <meshPhysicalMaterial 
+                      ref={ghostMaterialRef}
+                      color={currentColor}
+                      transparent 
+                      opacity={0.5}
+                      roughness={0.4}
+                      roughnessMap={roughnessMap}
+                      normalMap={normalMap}
+                      normalScale={new THREE.Vector2(0.1, 0.1)}
+                      depthWrite={false}
+                      emissive={isNightMode ? currentColor : '#000000'}
+                      emissiveIntensity={isNightMode ? 0.8 : 0.2}
+                      toneMapped={!PART_MAP.get(currentPartId)?.id?.includes('logic')}
+                   />
+                   <lineSegments raycast={() => null}>
+                      <edgesGeometry args={[geometries[currentPartId]?.edges || geometries[currentPartId]?.visual]} />
+                      <lineBasicMaterial ref={ghostEdgesRef} color={isNightMode ? "#888888" : "black"} opacity={0.3} transparent depthTest={true} />
+                   </lineSegments>
+                </mesh>
+            )}
             
             <group ref={footprintRef}>
               <mesh rotation={[-Math.PI/2, 0, 0]} raycast={() => null}>

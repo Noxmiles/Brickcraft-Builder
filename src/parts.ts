@@ -103,6 +103,11 @@ export const SPECIAL_PARTS = [
   { id: 'logic_wire', label: 'Redstone Kabel', size: [1, 1, PLATE_HEIGHT], type: 'tile' },
   { id: 'logic_battery', label: 'Batterieblock', size: [2, 2, BRICK_HEIGHT], type: 'brick' },
   { id: 'logic_led', label: 'LED Block 2x2', size: [2, 2, BRICK_HEIGHT], type: 'brick' },
+  { id: 'logic_td_spawn', label: 'Gegner-Spawn', type: 'box', size: [4, 4, 1] },
+  { id: 'logic_td_crystal', label: 'Energie-Kristall', type: 'crystal', size: [2, 2, 6] },
+  { id: 'logic_td_crystal_v2', label: 'Kristall v2', type: 'crystal_v2', size: [1, 1, 6] },
+  { id: 'logic_td_tower_rapid', label: 'Paragraph-Kanone', type: 'cone', size: [2, 2, 3], cost: 50 },
+  { id: 'logic_td_tower_heavy', label: 'Aktienschredder', type: 'box', size: [2, 2, 4], cost: 150 },
 ];
 
 export const PARTS = [
@@ -116,6 +121,18 @@ export const PARTS = [
 
 export const PART_MAP = new Map(PARTS.map(p => [p.id, p]));
 
+/**
+ * Calculates the exact world position for a part based on user cursor raycasting and alignment rules.
+ * Automatically aligns and snaps blocks to grid units.
+ * 
+ * @param point The raw Raycast intersection coordinate
+ * @param normal The normal vector of the face being intersected
+ * @param size The array defining block size [width, depth, height]
+ * @param snapToGrid Whether to force grid snapping
+ * @param rotation Current rotation state (0-3)
+ * @param allowHalfStud Used for special blocks e.g. Jumpers where half-stud logic applies
+ * @returns Final calculated [X, Y, Z] world position
+ */
 export function getGridPos(point: THREE.Vector3, normal: THREE.Vector3, size: number[], snapToGrid: boolean, rotation: number, allowHalfStud: boolean = false): number[] {
   const isRotated = rotation % 2 !== 0;
   const sx = isRotated ? size[1] : size[0];
@@ -155,6 +172,15 @@ export const normalizePos = (p: any): number[] => {
   return [p?.x || 0, p?.y || 0, p?.z || 0];
 };
 
+/**
+ * Computes the 3D collision bounding boxes for a placed block.
+ * Uses object rotation and part type to calculate accurately.
+ * 
+ * @param posRaw The raw block position (can be object or array)
+ * @param part The part definition from PARTS (contains dimensions)
+ * @param rot Rotation index
+ * @returns Array of collision bounding boxes '{minX, maxX, minY, ...}'
+ */
 export function getCollisionBoxes(posRaw: any, part: any, rot: number) {
   const pos = normalizePos(posRaw);
   const isRot = rot % 2 !== 0;
@@ -201,6 +227,10 @@ export function getCollisionBoxes(posRaw: any, part: any, rot: number) {
   }];
 }
 
+/**
+ * Verifies if two blocks intersect each other physically in 3D space.
+ * Prevents user from building intersecting block structures.
+ */
 export function checkCollision(posA: number[], partA: any, rotA: number, posB: number[], partB: any, rotB: number) {
   const boxesA = getCollisionBoxes(posA, partA, rotA);
   const boxesB = getCollisionBoxes(posB, partB, rotB);
