@@ -12,8 +12,7 @@ export default defineConfig(({mode}) => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      // Injecting the Gemini API key for cross-platform model access
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      // (No environment variables injected to the client bundle)
     },
     resolve: {
       alias: {

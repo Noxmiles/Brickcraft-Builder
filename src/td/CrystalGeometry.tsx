@@ -10,13 +10,11 @@ const CrystalRod = ({ radius, height, material, position, rotation }: any) => {
 
     return (
         <group position={position} rotation={rotation}>
-            <mesh position={[0, -tipH / 2, 0]}>
+            <mesh position={[0, -tipH / 2, 0]} material={material}>
                 <cylinderGeometry args={[radius, radius, bodyH, 6]} />
-                {material}
             </mesh>
-            <mesh position={[0, bodyH / 2, 0]}>
+            <mesh position={[0, bodyH / 2, 0]} material={material}>
                 <cylinderGeometry args={[0, radius, tipH, 6]} />
-                {material}
             </mesh>
         </group>
     );
@@ -27,10 +25,11 @@ const CrystalRod = ({ radius, height, material, position, rotation }: any) => {
  * Features a glowing core that pulses red when health gets low, and a complex
  * array of translucent rod primitives.
  */
-export const CrystalGeometry = forwardRef<THREE.Group, { color?: string }>(({ color = '#AEE9EF' }, ref) => {
+export const CrystalGeometry = forwardRef<THREE.Group, { color?: string, material?: any }>(({ color = '#AEE9EF', material }, ref) => {
     const materialsRef = useRef<THREE.MeshPhysicalMaterial[]>([]);
 
     useFrame(({ clock }) => {
+        if (material) return; // Do not pulse if custom material is provided (e.g. Ghost)
         if (tdEngine.crystalHp < 10) {
             const pulse = Math.sin(clock.elapsedTime * 10) * 0.5 + 0.5;
             materialsRef.current.forEach(mat => {
@@ -53,19 +52,22 @@ export const CrystalGeometry = forwardRef<THREE.Group, { color?: string }>(({ co
         }
     };
 
-    const createMaterial = () => (
-        <meshPhysicalMaterial 
-            ref={registerMat}
-            color={color}
-            roughness={0.1}
-            transmission={0.9} // Glassy look
-            thickness={0.5}
-            opacity={1}
-            transparent
-            emissive="#00ff00"
-            emissiveIntensity={0.2}
-        />
-    );
+    const createMaterial = () => {
+        if (material) return material;
+        return (
+            <meshPhysicalMaterial 
+                ref={registerMat}
+                color={color}
+                roughness={0.1}
+                transmission={0.9} // Glassy look
+                thickness={0.5}
+                opacity={1}
+                transparent
+                emissive="#00ff00"
+                emissiveIntensity={0.2}
+            />
+        );
+    };
 
     // Bounding volume is 2x2x6 array in App.tsx
     // Full height is 6 * 0.6 = 3.6.
@@ -79,21 +81,25 @@ export const CrystalGeometry = forwardRef<THREE.Group, { color?: string }>(({ co
     const sideRadius = 0.16; // Original 0.08 doubled
     const sideHeight = crystalHeight * 0.6; // Original 60%
 
+    // Since we pass material down as a prop, we need primitive if `material` is an object.
+    const getMaterial = () => typeof material === 'object' ? undefined : createMaterial();
+
     return (
         <group ref={ref}>
             {/* The base 2x2 round plate/tile */}
-            <mesh position={[0, baseY + baseHeight / 2, 0]}>
+            <mesh position={[0, baseY + baseHeight / 2, 0]} material={typeof material === 'object' ? material : undefined}>
                 <cylinderGeometry args={[baseRadius, baseRadius, baseHeight, 16]} />
-                {createMaterial()}
+                {getMaterial()}
             </mesh>
 
             {/* Central Crystal */}
             <CrystalRod 
                 radius={centerRadius} 
                 height={crystalHeight} 
-                material={createMaterial()} 
+                material={typeof material === 'object' ? material : undefined} 
                 position={[0, baseY + baseHeight + crystalHeight / 2, 0]} 
                 rotation={[0, 0, 0]} 
+                {...(getMaterial() ? { children: getMaterial() } : {})}
             />
 
             {/* 4 Side Crystals */}
@@ -102,17 +108,15 @@ export const CrystalGeometry = forwardRef<THREE.Group, { color?: string }>(({ co
                 const tiltAngle = 20 * (Math.PI / 180); // ~70 deg from horizontal
                 const outDist = 0.16; // original 0.08 doubled
 
-                // Adjust to tilt outwards
-                // By grouping and rotating Y first, then placing at +Z and tilting +X,
-                // we ensure they sprout outward symmetrically.
                 return (
                     <group key={i} rotation-y={angle}>
                         <CrystalRod 
                             radius={sideRadius} 
                             height={sideHeight} 
-                            material={createMaterial()} 
+                            material={typeof material === 'object' ? material : undefined} 
                             position={[0, baseY + baseHeight + sideHeight / 2 - 0.2, outDist]} 
                             rotation={[tiltAngle, 0, 0]} 
+                            {...(getMaterial() ? { children: getMaterial() } : {})}
                         />
                     </group>
                 );

@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { getGridPos, getCollisionBoxes, checkCollision, PARTS, PART_MAP } from './parts';
-import { performStabilityCheck } from './App';
+import { getGridPos } from './builder/grid';
+import { getCollisionBoxes, checkCollision } from './builder/collision';
+import { PARTS, PART_MAP } from './builder/partsData';
+import { performStabilityCheck } from './builder/physics';
 
 describe('Brickcraft Build Logic', () => {
   it('getGridPos should snap positions to the grid correctly with rotation', () => {
@@ -74,11 +76,11 @@ describe('Brickcraft Build Logic', () => {
   });
 
   it('performStabilityCheck should correctly identify unsupported (falling) blocks', () => {
-    // block 0 on ground (y ~ 0)
+    // block 0 on ground (y ~ -0.2 so minY is -0.5)
     const blocks = [
-      { id: 'b1', position: [0, 0, 0], partId: 'brick_2x4', rotation: 0 },
+      { id: 'b1', position: [0, -0.2, 0], partId: 'brick_2x4', rotation: 0 },
       // block 1 resting on block 0
-      { id: 'b2', position: [0, 1.0, 0], partId: 'brick_2x4', rotation: 0 },
+      { id: 'b2', position: [0, 0.4, 0], partId: 'brick_2x4', rotation: 0 },
       // block 2 floating in air
       { id: 'b3', position: [10, 5, 10], partId: 'brick_2x4', rotation: 0 },
     ];

@@ -5,196 +5,26 @@ import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { TEMPLATES } from './templates';
-import { GoogleGenAI } from "@google/genai";
-
 import { Volume2, VolumeX, Music, Wind, Search, Info, ExternalLink, ChevronDown, ChevronUp, Zap, Hand, MousePointer2, Hammer, Paintbrush, Undo2, Redo2, X } from 'lucide-react';
-import { COLORS, COLOR_MAP, PLATE_HEIGHT, BRICK_HEIGHT, GRID_UNIT_WIDTH, GRID_UNIT_HEIGHT, STUD_HEIGHT, STUD_RADIUS, PARTS, PART_MAP, getGridPos, normalizePos, getCollisionBoxes, checkCollision } from './parts';
-import { tdEngine } from './tdEngine';
-import { extractVoxelGrid, TDPathfinder } from './tdPathfinding';
-import { TdSimulation } from './tdSimulation';
-import { CrystalGeometry } from './CrystalGeometry';
-import { CrystalGeometryV2 } from './CrystalGeometryV2';
+import { COLORS, COLOR_MAP, PLATE_HEIGHT, BRICK_HEIGHT, GRID_UNIT_WIDTH, GRID_UNIT_HEIGHT, STUD_HEIGHT, STUD_RADIUS, PARTS, PART_MAP } from './builder/partsData';
+import { getGridPos, normalizePos } from './builder/grid';
+import { CoordinateLookup, getCollisionBoxes } from './builder/collision';
+import { calculateLogicState } from './builder/logic';
+import { Block } from './core/types';
+import { tdEngine } from './td/tdEngine';
+import { extractVoxelGrid, TDPathfinder } from './td/tdPathfinding';
+import { TdSimulation } from './td/tdSimulation';
+import { TowerRegistry } from './td/registry';
+import { CrystalGeometry } from './td/CrystalGeometry';
+import { CrystalGeometryV2 } from './td/CrystalGeometryV2';
+import { AudioEngine } from './core/audio';
+import { parseSaveFile, generateSaveData } from './builder/io';
+import { performStabilityCheck } from './builder/physics';
+import { useBrickGeometries } from './rendering/geometries';
+import { baseplateStudUVsOnCompile, randomUVsOnCompile, roughnessMap, floorRoughnessMap, studFloorRoughnessMap, studFloorNormalMap, microRoughnessMap, normalMap, floorNormalMap, customEnvMap, getGhostMaterial } from './rendering/materials';
 
-const AudioEngine = {
-  ctx: null as AudioContext | null,
-  masterGain: null as GainNode | null,
-  sfxGain: null as GainNode | null,
-  ambientGain: null as GainNode | null,
-  musicGain: null as GainNode | null,
-  
-  // Music tracks
-  musicAudio: null as HTMLAudioElement | null,
-  ambientAudio: null as HTMLAudioElement | null,
-  musicTracks: [
-    '/music/midnight-jazz-cafe.mp3',
-    '/music/rainy-afternoon-chords.mp3',
-    '/music/rainy-day-contemplation.mp3'
-  ],
-  currentTrackIndex: 0,
-  isInitialized: false,
-  
-  init() {
-    if (this.isInitialized) return;
-    try {
-      this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      this.masterGain = this.ctx.createGain();
-      this.sfxGain = this.ctx.createGain();
-      this.ambientGain = this.ctx.createGain();
-      this.musicGain = this.ctx.createGain();
-      
-      this.masterGain.connect(this.ctx.destination);
-      this.sfxGain.connect(this.masterGain);
-      this.ambientGain.connect(this.masterGain);
-      this.musicGain.connect(this.masterGain);
-      
-      // Initialize internal gains to 0. React state will bring them up.
-      this.ambientGain.gain.value = 0;
-      this.musicGain.gain.value = 0;
 
-      this.setupWind();
-      this.setupMusic();
-      this.isInitialized = true;
-    } catch (e) {
-      console.warn("Audio Context failed to initialize", e);
-    }
-  },
 
-  setupMusic() {
-    if (!this.ctx || !this.musicGain) return;
-    this.musicAudio = new Audio();
-    this.musicAudio.crossOrigin = "anonymous";
-    const source = this.ctx.createMediaElementSource(this.musicAudio);
-    source.connect(this.musicGain);
-
-    this.musicAudio.onended = () => {
-      this.playNextTrack();
-    };
-  },
-
-  playNextTrack() {
-    if (!this.musicAudio) return;
-    this.currentTrackIndex = (this.currentTrackIndex + 1) % this.musicTracks.length;
-    this.musicAudio.src = this.musicTracks[this.currentTrackIndex];
-    this.musicAudio.play().catch(() => {});
-  },
-
-  setupWind() {
-    if (!this.ctx || !this.ambientGain) return;
-    this.ambientAudio = new Audio('/music/freesound_community-windy-forest-32853.mp3');
-    this.ambientAudio.crossOrigin = "anonymous";
-    this.ambientAudio.loop = true;
-    const source = this.ctx.createMediaElementSource(this.ambientAudio);
-    source.connect(this.ambientGain);
-  },
-
-  playClick() {
-    if (!this.isInitialized) return;
-    if (this.ctx?.state === 'suspended') this.ctx.resume();
-    if (!this.ctx || !this.sfxGain) return;
-    
-    const t = this.ctx.currentTime + 0.01;
-    
-    // Impact 1: Depth/Thud
-    const osc1 = this.ctx.createOscillator();
-    const g1 = this.ctx.createGain();
-    osc1.type = 'triangle';
-    osc1.frequency.setValueAtTime(150, t);
-    osc1.frequency.exponentialRampToValueAtTime(45, t + 0.05);
-    g1.gain.setValueAtTime(0.25, t);
-    g1.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
-    osc1.connect(g1);
-    g1.connect(this.sfxGain);
-
-    // Impact 2: Sharp plastic click
-    const bufSize = this.ctx.sampleRate * 0.02;
-    const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
-    for(let i=0; i<bufSize; i++) buf.getChannelData(0)[i] = (Math.random() * 2 - 1) * 0.3;
-    const noise = this.ctx.createBufferSource();
-    noise.buffer = buf;
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'highpass';
-    filter.frequency.value = 3200;
-    const ng = this.ctx.createGain();
-    ng.gain.setValueAtTime(0.22, t);
-    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.018);
-    noise.connect(filter);
-    filter.connect(ng);
-    ng.connect(this.sfxGain);
-
-    osc1.start(t);
-    noise.start(t);
-    osc1.stop(t + 0.05);
-    noise.stop(t + 0.02);
-  },
-
-  playPop() {
-    if (!this.isInitialized || !this.ctx || !this.sfxGain) return;
-    const t = this.ctx.currentTime + 0.01;
-    const osc = this.ctx.createOscillator();
-    const g = this.ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(450, t);
-    osc.frequency.exponentialRampToValueAtTime(120, t + 0.08);
-    g.gain.setValueAtTime(0.15, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
-    osc.connect(g);
-    g.connect(this.sfxGain);
-    osc.start(t);
-    osc.stop(t + 0.08);
-  },
-
-  playShot(damage: number) {
-    if (!this.isInitialized || !this.ctx || !this.sfxGain) return;
-    const t = this.ctx.currentTime + 0.01;
-    const osc = this.ctx.createOscillator();
-    const g = this.ctx.createGain();
-
-    if (damage >= 100) {
-      // Heavy cannon - very deep sound
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(80, t);
-      osc.frequency.exponentialRampToValueAtTime(30, t + 0.15);
-      g.gain.setValueAtTime(0.3, t);
-      g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
-    } else {
-      // Rapid shredder - lighter pop
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(300, t);
-      osc.frequency.exponentialRampToValueAtTime(120, t + 0.05);
-      g.gain.setValueAtTime(0.1, t);
-      g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
-    }
-
-    osc.connect(g);
-    g.connect(this.sfxGain);
-    osc.start(t);
-    osc.stop(t + 0.2);
-  },
-
-  setSfxVolume(v: number) { 
-    if (this.sfxGain) this.sfxGain.gain.setTargetAtTime(v, this.ctx?.currentTime || 0, 0.1); 
-  },
-  setAmbientVolume(v: number) { 
-    if (this.ambientGain) this.ambientGain.gain.setTargetAtTime(v, this.ctx?.currentTime || 0, 0.1);
-    if (v > 0 && this.ambientAudio && this.ambientAudio.paused) {
-      this.ambientAudio.play().catch(() => {});
-    } else if (v === 0 && this.ambientAudio) {
-      this.ambientAudio.pause();
-    }
-  },
-  setMusicVolume(v: number) { 
-    if (this.musicGain) this.musicGain.gain.setTargetAtTime(v, this.ctx?.currentTime || 0, 0.1);
-    
-    if (v > 0 && this.musicAudio && this.musicAudio.paused) {
-      if (!this.musicAudio.src) {
-        this.musicAudio.src = this.musicTracks[this.currentTrackIndex];
-      }
-      this.musicAudio.play().catch(() => {});
-    } else if (v === 0 && this.musicAudio) {
-      this.musicAudio.pause();
-    }
-  }
-};
 
 function LicenseItem({ title, license, content }: { title: string, license: string, content: string }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -223,242 +53,7 @@ function LicenseItem({ title, license, content }: { title: string, license: stri
   );
 }
 
-const baseplateStudUVsOnCompile = (shader: any) => {
-  shader.vertexShader = shader.vertexShader.replace(
-    '#include <uv_vertex>',
-    `
-    #include <uv_vertex>
-    #ifdef USE_INSTANCING
-      vec4 worldPositionForUV = instanceMatrix * vec4(position, 1.0);
-      vec2 floorUv = vec2(
-         (worldPositionForUV.x + 16.0) / 32.0,
-         (-worldPositionForUV.z + 16.0) / 32.0
-      );
-      #if defined( USE_UV )
-        vUv = floorUv;
-      #endif
-      #if defined( USE_MAP )
-        vMapUv = floorUv;
-      #endif
-      #if defined( USE_NORMALMAP )
-        vNormalMapUv = floorUv;
-      #endif
-      #if defined( USE_ROUGHNESSMAP )
-        vRoughnessMapUv = floorUv;
-      #endif
-    #endif
-    `
-  );
-};
 
-const randomUVsOnCompile = (shader: any) => {
-  shader.vertexShader = shader.vertexShader.replace(
-    '#include <uv_vertex>',
-    `
-    #include <uv_vertex>
-    #ifdef USE_INSTANCING
-      vec2 uvOffset = instanceMatrix[3].xz * 0.137;
-    #else
-      vec2 uvOffset = modelMatrix[3].xz * 0.137;
-    #endif
-    #if defined( USE_UV )
-      vUv += uvOffset;
-    #endif
-    #if defined( USE_MAP )
-      vMapUv += uvOffset;
-    #endif
-    #if defined( USE_NORMALMAP )
-      vNormalMapUv += uvOffset;
-    #endif
-    #if defined( USE_ROUGHNESSMAP )
-      vRoughnessMapUv += uvOffset;
-    #endif
-    `
-  );
-};
-
-const { roughnessMap, floorRoughnessMap, studFloorRoughnessMap, studFloorNormalMap, microRoughnessMap, normalMap, floorNormalMap, customEnvMap } = (() => {
-  const canvas = document.createElement('canvas');
-  canvas.width = 1024;
-  canvas.height = 1024;
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    // Base: Semi-glossy plastic (#11 to #22 is very shiny, #33+ is more matte)
-    ctx.fillStyle = '#1a1a1a';
-    ctx.fillRect(0, 0, 1024, 1024);
-    
-    // 1. Fine Pitting / Dust (Dots)
-    for (let i = 0; i < 400; i++) {
-        const x = Math.random() * 1024;
-        const y = Math.random() * 1024;
-        const v = Math.floor(Math.random() * 40) + 40;
-        const size = Math.random() * 2 + 1; // Much smaller dots
-        ctx.fillStyle = `rgba(${v},${v},${v},${Math.random() * 0.4})`;
-        ctx.beginPath();
-        ctx.arc(x, y, size, 0, Math.PI * 2);
-        ctx.fill();
-    }
-
-    // 2. Play Wear Scratches (Irregular lines)
-    for (let i = 0; i < 70; i++) {
-      const x = Math.random() * 1024;
-      const y = Math.random() * 1024;
-      const len = Math.random() * 60 + 20; // Longer scratches
-      const angle = Math.random() * Math.PI * 2;
-      const v = Math.floor(Math.random() * 100) + 120; // High roughness value
-      const opacity = Math.random() * 0.3 + 0.1;
-      
-      ctx.strokeStyle = `rgba(${v},${v},${v},${opacity})`;
-      ctx.lineWidth = Math.random() * 1.5 + 0.5; // Thinner lines
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      const midX = x + Math.cos(angle) * (len * 0.5) + (Math.random() - 0.5) * 10;
-      const midY = y + Math.sin(angle) * (len * 0.5) + (Math.random() - 0.5) * 10;
-      ctx.lineTo(midX, midY);
-      ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len);
-      ctx.stroke();
-    }
-    
-    // 3. Rubbed areas / Smudges (Heavy wear patches)
-    for (let i = 0; i < 60; i++) {
-      const x = Math.random() * 1024;
-      const y = Math.random() * 1024;
-      const r = Math.random() * 30 + 10;
-      const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
-      const intensity = Math.floor(Math.random() * 60) + 150;
-      grad.addColorStop(0, `rgba(${intensity}, ${intensity}, ${intensity}, 0.25)`);
-      grad.addColorStop(1, 'rgba(26, 26, 26, 0)');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-  
-  const baseTex = new THREE.CanvasTexture(canvas);
-  baseTex.wrapS = baseTex.wrapT = THREE.RepeatWrapping;
-  
-  // Versions for different scales
-  const rMap = baseTex.clone();
-  rMap.repeat.set(0.5, 0.5); // 1 repeat per 2 units, same as the floor
-  
-  const mMap = baseTex.clone();
-  mMap.repeat.set(0.5, 0.5); // Better for bricks/studs
-
-  // Generate Normal Map from Roughness Map
-  const normalCanvas = document.createElement('canvas');
-  normalCanvas.width = 1024;
-  normalCanvas.height = 1024;
-  const nCtx = normalCanvas.getContext('2d');
-  if (ctx && nCtx) {
-     const imgData = ctx.getImageData(0, 0, 1024, 1024);
-     const nData = nCtx.createImageData(1024, 1024);
-     const data = imgData.data;
-     const nd = nData.data;
-     const w = 1024;
-     const h = 1024;
-     
-     // Simple discrete difference to approximate local gradient
-     for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-           const i = (y * w + x) * 4;
-           // Red channel holds grayscale height
-           const c = data[i] / 255.0; 
-           
-           const cxX = x < w - 1 ? data[i + 4] / 255.0 : c;
-           const cyY = y < h - 1 ? data[i + w * 4] / 255.0 : c;
-           
-           // Height difference
-           const dx = (c - cxX) * 15.0; // strength multiplier
-           const dy = (c - cyY) * 15.0;
-           const dz = 1.0;
-           
-           // Normalize vector
-           const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
-           const nx = dx / len;
-           const ny = dy / len;
-           const nz = dz / len;
-           
-           // Map from [-1, 1] to [0, 255]
-           nd[i] = Math.floor((nx * 0.5 + 0.5) * 255);     // R represents X
-           nd[i+1] = Math.floor((ny * 0.5 + 0.5) * 255);   // G represents Y
-           nd[i+2] = Math.floor((nz * 0.5 + 0.5) * 255);   // B represents Z
-           nd[i+3] = 255;                                  // Alpha
-        }
-     }
-     nCtx.putImageData(nData, 0, 0);
-  }
-  
-  const normalTex = new THREE.CanvasTexture(normalCanvas);
-  normalTex.wrapS = normalTex.wrapT = THREE.RepeatWrapping;
-  
-  const nMap = normalTex.clone();
-  nMap.repeat.set(1, 1);
-  
-  const floorNMap = normalTex.clone();
-  floorNMap.repeat.set(16, 16);
-
-  // ---------------------------------------------------------
-  // Create Custom Environment Map (Blank backdrop with a "Sun")
-  // ---------------------------------------------------------
-  const envCanvas = document.createElement('canvas');
-  envCanvas.width = 1024;
-  envCanvas.height = 512;
-  const envCtx = envCanvas.getContext('2d');
-  if (envCtx) {
-    // Brighter neutral environment background for better color representation
-    envCtx.fillStyle = '#2a2a2a';
-    envCtx.fillRect(0, 0, 1024, 512);
-    
-    // Major light source (Simulated Sun)
-    const centerX = 512;
-    const centerY = 120;
-    const radius = 90;
-    
-    // Sun
-    const grad = envCtx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius * 4);
-    grad.addColorStop(0, '#ffffff');
-    grad.addColorStop(0.1, '#fff9e6'); 
-    grad.addColorStop(0.2, '#bbbbbb');
-    grad.addColorStop(0.5, '#444444');
-    grad.addColorStop(1, 'rgba(42, 42, 42, 0)');
-    
-    envCtx.fillStyle = grad;
-    envCtx.beginPath();
-    envCtx.arc(centerX, centerY, radius * 4, 0, Math.PI * 2);
-    envCtx.fill();
-
-    // Fill light (Back)
-    const backCenterX = 100;
-    const backCenterY = 400;
-    const backGrad = envCtx.createRadialGradient(backCenterX, backCenterY, 0, backCenterX, backCenterY, 300);
-    backGrad.addColorStop(0, '#333344');
-    backGrad.addColorStop(1, 'rgba(42, 42, 42, 0)');
-    envCtx.fillStyle = backGrad;
-    envCtx.beginPath();
-    envCtx.arc(backCenterX, backCenterY, 300, 0, Math.PI * 2);
-    envCtx.fill();
-  }
-  const eMap = new THREE.CanvasTexture(envCanvas);
-  eMap.mapping = THREE.EquirectangularReflectionMapping;
-
-  rMap.wrapS = THREE.RepeatWrapping;
-  rMap.wrapT = THREE.RepeatWrapping;
-  rMap.repeat.set(1, 1);
-
-  const floorMap = rMap.clone();
-  floorMap.repeat.set(16, 16);
-
-  const studFloorMap = rMap.clone();
-  studFloorMap.repeat.set(0.15, 0.15);
-  
-  const studFloorNMap = normalTex.clone();
-  studFloorNMap.wrapS = THREE.RepeatWrapping;
-  studFloorNMap.wrapT = THREE.RepeatWrapping;
-  studFloorNMap.repeat.set(0.15, 0.15);
-
-  return { roughnessMap: rMap, floorRoughnessMap: floorMap, studFloorRoughnessMap: studFloorMap, studFloorNormalMap: studFloorNMap, microRoughnessMap: mMap, normalMap: nMap, floorNormalMap: floorNMap, customEnvMap: eMap };
-})();
 
 /**
  * Grid Snapping and Position Calculation
@@ -475,329 +70,7 @@ const { roughnessMap, floorRoughnessMap, studFloorRoughnessMap, studFloorNormalM
  * Merges visual components (base, studs, holes) into single BufferGeometries
  * for optimized instantiation and rendering.
  */
-function useBrickGeometries() {
-  return useMemo(() => {
-    const geometries: Record<string, { visual: THREE.BufferGeometry, collision: THREE.BufferGeometry, edges: THREE.BufferGeometry, size: number[] }> = {};
-    
-    PARTS.forEach(part => {
-      const [w, d, h] = part.size;
-      const wActual = w * GRID_UNIT_WIDTH; 
-      const dActual = d * GRID_UNIT_WIDTH;
-      const hActual = h * GRID_UNIT_HEIGHT;
-      
-      const visualParts = [];
-      const edgeParts = [];
-      
-      // Base Shape
-      const isRound = part.type === 'cylinder' || (part.type === 'tile' && part.id.includes('round'));
-      const roofT = Math.min(0.1, hActual); // ensure roof is not thicker than the piece
-      
-      if ((part.type === 'box' || part.type === 'tile' || part.type === 'brick' || part.type === 'plate') && !isRound) {
-         const body = new THREE.BoxGeometry(wActual, hActual, dActual);
-         visualParts.push(body);
-         edgeParts.push(body);
-      } else if (isRound || part.type === 'cylinder_hole') {
-         if (part.type === 'cylinder_hole') {
-            const outerRadius = wActual / 2;
-            const innerRadius = 0.1;
-            const shape = new THREE.Shape();
-            shape.absarc(0, 0, outerRadius, 0, Math.PI * 2, false);
-            const holePath = new THREE.Path();
-            holePath.absarc(0, 0, innerRadius, 0, Math.PI * 2, true);
-            shape.holes.push(holePath);
-            const holeGeo = new THREE.ExtrudeGeometry(shape, { depth: hActual, bevelEnabled: false });
-            holeGeo.center();
-            holeGeo.rotateX(Math.PI / 2);
-            visualParts.push(holeGeo);
-            edgeParts.push(holeGeo);
-         } else {
-            const cyl = new THREE.CylinderGeometry(wActual / 2, wActual / 2, hActual, 32);
-            visualParts.push(cyl);
-            edgeParts.push(cyl);
-         }
-      } else if (part.type === 'slope_inv') {
-         const shape = new THREE.Shape();
-         shape.moveTo(-dActual/2, hActual/2);
-         shape.lineTo(dActual/2, hActual/2);
-         shape.lineTo(dActual/2, -hActual/2);
-         shape.lineTo(-dActual/2, hActual/2); 
-         const extrudeSettings = { depth: wActual, bevelEnabled: false };
-         const slopeGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-         slopeGeo.center();
-         slopeGeo.rotateY(Math.PI / 2);
-         visualParts.push(slopeGeo);
-         edgeParts.push(slopeGeo);
-      } else if (part.type === 'corner') {
-         const shape = new THREE.Shape();
-         shape.moveTo(-wActual/2, -dActual/2);
-         shape.lineTo(wActual/2, -dActual/2);
-         shape.lineTo(wActual/2, 0);
-         shape.lineTo(0, 0);
-         shape.lineTo(0, dActual/2);
-         shape.lineTo(-wActual/2, dActual/2);
-         shape.lineTo(-wActual/2, -dActual/2);
-         
-         const cornerGeo = new THREE.ExtrudeGeometry(shape, { depth: hActual, bevelEnabled: false });
-         cornerGeo.center();
-         cornerGeo.rotateX(Math.PI / 2);
-         visualParts.push(cornerGeo);
-         edgeParts.push(cornerGeo);
-      } else if (part.type === 'slope') {
-         const shape = new THREE.Shape();
-         shape.moveTo(-dActual/2, -hActual/2);
-         shape.lineTo(dActual/2, -hActual/2);
-         shape.lineTo(dActual/2, hActual/2);
-         shape.lineTo(-dActual/2, -hActual/2); 
-         
-         const extrudeSettings = { depth: wActual, bevelEnabled: false };
-         const slopeGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-         slopeGeo.center();
-         slopeGeo.rotateY(Math.PI / 2);
-         visualParts.push(slopeGeo);
-         edgeParts.push(slopeGeo);
-      } else if (part.type === 'slope_2studs') {
-         const shape = new THREE.Shape();
-         shape.moveTo(-dActual/2, -hActual/2);
-         shape.lineTo(dActual/2, -hActual/2);
-         shape.lineTo(dActual/2, hActual/2);
-         shape.lineTo(0, hActual/2);
-         shape.lineTo(-dActual/2, -hActual/2);
- 
-         const slopeGeo = new THREE.ExtrudeGeometry(shape, { depth: wActual, bevelEnabled: false });
-         slopeGeo.center();
-         slopeGeo.rotateY(Math.PI / 2);
-         visualParts.push(slopeGeo);
-         edgeParts.push(slopeGeo);
- 
-         const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
-         for (let x = 0; x < w; x++) {
-            const sx = (x - w/2 + 0.5) * GRID_UNIT_WIDTH;
-            const sz = -(1.5 - d/2) * GRID_UNIT_WIDTH; 
-            const stud = studGeo.clone();
-            stud.translate(sx, hActual/2 + STUD_HEIGHT/2, sz);
-            visualParts.push(stud);
-            edgeParts.push(stud);
-         }
-      } else if (part.type === 'wedge_plate') {
-         const shape = new THREE.Shape();
-         shape.moveTo(-wActual/2, -dActual/2);
-         shape.lineTo(wActual/2, -dActual/2);
-         shape.lineTo(wActual/2, -dActual/2 + GRID_UNIT_WIDTH); 
-         shape.lineTo(-wActual/2 + GRID_UNIT_WIDTH, dActual/2); 
-         shape.lineTo(-wActual/2, dActual/2);
-         shape.lineTo(-wActual/2, -dActual/2);
- 
-         const wedgeGeo = new THREE.ExtrudeGeometry(shape, { depth: hActual, bevelEnabled: false });
-         wedgeGeo.center();
-         wedgeGeo.rotateX(Math.PI / 2);
-         visualParts.push(wedgeGeo);
-         edgeParts.push(wedgeGeo);
- 
-         const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
-         for (let ix = 0; ix < w; ix++) {
-            for (let iz = 0; iz < d; iz++) {
-               if (ix + iz >= 3) continue;
-               
-               const sx = (ix - w/2 + 0.5) * GRID_UNIT_WIDTH;
-               const sz = (iz - d/2 + 0.5) * GRID_UNIT_WIDTH;
-               const stud = studGeo.clone();
-               stud.translate(sx, hActual/2 + STUD_HEIGHT/2, sz);
-               visualParts.push(stud);
-               edgeParts.push(stud);
-            }
-         }
-      } else if (part.type === 'dish_inverted' || part.type === 'dish_test') {
-         const segments = 32;
-         const outerRadius = wActual / 2;
-         const innerRadius = 0.2;
-         const thickness = 0.18; 
-         const isTest = part.type === 'dish_test';
-         
-         const points = [];
-         const curvePoints = 12;
-         for (let i = 0; i <= curvePoints; i++) {
-            const t = i / curvePoints;
-            const r = innerRadius + (outerRadius - innerRadius) * t;
-            const y = -hActual/2 + Math.pow(t, 2.0) * hActual;
-            points.push(new THREE.Vector2(r, y));
-         }
-         for (let i = curvePoints; i >= 0; i--) {
-            const t = i / curvePoints;
-            const r = innerRadius + (outerRadius - thickness - innerRadius) * t;
-            const y = -hActual/2 + Math.pow(t, 2.0) * hActual + thickness;
-            points.push(new THREE.Vector2(Math.max(0.01, r), y));
-         }
-         const latheGeo = new THREE.LatheGeometry(points, segments);
-         if (isTest) latheGeo.rotateX(Math.PI);
-         visualParts.push(latheGeo);
-         edgeParts.push(latheGeo);
-         
-         if (part.type === 'dish_inverted') {
-            const connectGeo = new THREE.CylinderGeometry(0.15, 0.25, 0.2, 16);
-            connectGeo.translate(0, -hActual/2 + 0.1, 0);
-            visualParts.push(connectGeo);
-         } else {
-            const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
-            studGeo.translate(0, hActual/2 - thickness/2, 0);
-            visualParts.push(studGeo);
-         }
-      } else if (part.type === 'crystal') {
-         // Generate base tile at the bottom (scaled by 2, so height is 2 plates)
-         const baseH = PLATE_HEIGHT * GRID_UNIT_HEIGHT * 2; // 0.4
-         const baseRadius = wActual / 2 * 0.8; // ~0.4 for 2x2
-         
-         const boxGeo = new THREE.CylinderGeometry(baseRadius, baseRadius, baseH, 16);
-         boxGeo.translate(0, -hActual/2 + baseH/2, 0);
-         visualParts.push(boxGeo);
-         edgeParts.push(boxGeo);
 
-         // No studs since it's a round tile base
-      } else if (part.type === 'cone') {
-         const cyl = new THREE.CylinderGeometry(0.22, wActual / 2, hActual, 32); 
-         visualParts.push(cyl);
-         edgeParts.push(cyl);
-         const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
-         const stud = studGeo.clone();
-         stud.translate(0, hActual/2 + STUD_HEIGHT/2, 0); 
-         visualParts.push(stud);
-         edgeParts.push(stud);
-      } else if (part.type === 'jumper' || part.type === 'jumper_round') {
-         if (part.type === 'jumper_round') {
-            const cyl = new THREE.CylinderGeometry(wActual / 2, wActual / 2, hActual, 32);
-            visualParts.push(cyl);
-            edgeParts.push(cyl);
-            const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
-            const stud = studGeo.clone();
-            stud.translate(0, hActual/2 + STUD_HEIGHT/2, 0); 
-            visualParts.push(stud);
-            edgeParts.push(stud);
-         } else {
-            const body = new THREE.BoxGeometry(wActual, hActual, dActual);
-            visualParts.push(body);
-            edgeParts.push(body);
-            const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
-            const stud = studGeo.clone();
-            stud.translate(0, hActual/2 + STUD_HEIGHT/2, 0); 
-            visualParts.push(stud);
-            edgeParts.push(stud);
-         }
-      }
- 
-      // Add studs for boxes and corners
-      if (part.type === 'box' || part.type === 'brick' || part.type === 'plate' || part.type === 'corner' || part.type === 'cylinder' || part.type === 'slope_inv') {
-        const studGeo = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
-        for (let x = 0; x < w; x++) {
-          for (let z = 0; z < d; z++) {
-            if (part.type === 'corner' && x >= w / 2 && z >= d / 2) continue;
-            if (part.type === 'cylinder') {
-              const dx = (x - w / 2 + 0.5) * GRID_UNIT_WIDTH;
-              const dz = (z - d / 2 + 0.5) * GRID_UNIT_WIDTH;
-              const dist = Math.sqrt(dx * dx + dz * dz);
-              const threshold = w === 3 ? 0.6 : (wActual / 2 - 0.01);
-              if (dist > threshold) continue;
-            }
-            const sx = (x - w/2 + 0.5) * GRID_UNIT_WIDTH;
-            const sz = (z - d/2 + 0.5) * GRID_UNIT_WIDTH;
-            const stud = studGeo.clone();
-            stud.translate(sx, hActual/2 + STUD_HEIGHT/2, sz);
-            visualParts.push(stud);
-            edgeParts.push(stud);
-          }
-        }
-      }
- 
-      // Add underside structure
-      if ((part.type === 'box' || part.type === 'brick' || part.type === 'plate' || part.type === 'corner') && !isRound) {
-         const tubeRadiusOuter = 0.16;
-         const tubeRadiusInner = 0.10;
-         const pinRadius = 0.08;
-         const innerH = hActual - (Math.min(0.1, hActual));
-         
-         const shape = new THREE.Shape();
-         shape.absarc(0, 0, tubeRadiusOuter, 0, Math.PI * 2, false);
-         const holePath = new THREE.Path();
-         holePath.absarc(0, 0, tubeRadiusInner, 0, Math.PI * 2, true);
-         shape.holes.push(holePath);
-         
-         const hollowTubeGeo = new THREE.ExtrudeGeometry(shape, { depth: innerH, bevelEnabled: false });
-         hollowTubeGeo.center();
-         hollowTubeGeo.rotateX(Math.PI / 2);
-         const pinGeo = new THREE.CylinderGeometry(pinRadius, pinRadius, innerH, 12);
-         
-         for (let x = 0; x < w - 1; x++) {
-           for (let z = 0; z < d - 1; z++) {
-             if (part.type === 'corner' && x >= w / 2 - 1 && z >= d / 2 - 1) continue;
-             const sx = (x - w/2 + 1) * GRID_UNIT_WIDTH;
-             const sz = (z - d/2 + 1) * GRID_UNIT_WIDTH;
-             const tube = hollowTubeGeo.clone();
-             tube.translate(sx, -hActual/2 + innerH/2, sz);
-             visualParts.push(tube);
-           }
-         }
-         
-         if (w === 1 && d > 1) {
-            for (let z = 0; z < d - 1; z++) {
-               const sz = (z - d/2 + 1) * GRID_UNIT_WIDTH;
-               const pin = pinGeo.clone();
-               pin.translate(0, -hActual/2 + innerH/2, sz);
-               visualParts.push(pin);
-            }
-         } else if (d === 1 && w > 1) {
-            for (let x = 0; x < w - 1; x++) {
-               const sx = (x - w/2 + 1) * GRID_UNIT_WIDTH;
-               const pin = pinGeo.clone();
-               pin.translate(sx, -hActual/2 + innerH/2, 0);
-               visualParts.push(pin);
-            }
-         }
-      }
- 
-      if (visualParts.length === 0) return;
- 
-      const mergedVisual = mergeGeometries(visualParts.map(g => g.index ? g.toNonIndexed() : g));
-      if (mergedVisual) {
-        mergedVisual.computeVertexNormals();
-        const pos = mergedVisual.attributes.position;
-        const norm = mergedVisual.attributes.normal;
-        const uvs = mergedVisual.attributes.uv;
-        if (pos && norm && uvs) {
-           for (let i = 0; i < pos.count; i++) {
-              const nx = Math.abs(norm.getX(i));
-              const ny = Math.abs(norm.getY(i));
-              const nz = Math.abs(norm.getZ(i));
-              const px = pos.getX(i);
-              const py = pos.getY(i);
-              const pz = pos.getZ(i);
-              
-              if (ny > nx && ny > nz) uvs.setXY(i, px / 2, pz / 2);
-              else if (nx > ny && nx > nz) uvs.setXY(i, pz / 2, py / 2);
-              else uvs.setXY(i, px / 2, py / 2);
-           }
-           uvs.needsUpdate = true;
-        }
-      }
-      
-      let collisionGeo;
-      if (part.type === 'corner') {
-         const c1 = new THREE.BoxGeometry(wActual, hActual, dActual / 2);
-         c1.translate(0, 0, -dActual / 4);
-         const c2 = new THREE.BoxGeometry(wActual / 2, hActual, dActual / 2);
-         c2.translate(-wActual / 4, 0, dActual / 4);
-         const collisionParts = [c1, c2].map(g => g.index ? g.toNonIndexed() : g);
-         collisionGeo = mergeGeometries(collisionParts);
-      } else {
-         collisionGeo = new THREE.BoxGeometry(wActual, hActual, dActual);
-      }
-      
-      if (mergedVisual && collisionGeo) {
-         const mergedEdges = mergeGeometries(edgeParts.map(g => g.index ? g.toNonIndexed() : g));
-         geometries[part.id] = { visual: mergedVisual, collision: collisionGeo, edges: mergedEdges, size: part.size };
-      }
-    });
-    
-    return geometries;
-  }, []);
-}
 
 /**
  * Performs a comprehensive stability check on all placed blocks.
@@ -816,193 +89,7 @@ function useBrickGeometries() {
 /**
  * Spatial Partitioning: Simple Octree for fast collision and stability checks
  */
-class Octree {
-  nodes: Octree[] = [];
-  objects: any[] = [];
-  bounds: { minX: number, maxX: number, minY: number, maxY: number, minZ: number, maxZ: number };
-  capacity = 8;
-  depth: number;
 
-  constructor(bounds: any, depth = 0) {
-    this.bounds = bounds;
-    this.depth = depth;
-  }
-
-  subdivide() {
-    const { minX, maxX, minY, maxY, minZ, maxZ } = this.bounds;
-    const midX = (minX + maxX) / 2;
-    const midY = (minY + maxY) / 2;
-    const midZ = (minZ + maxZ) / 2;
-
-    this.nodes = [
-      new Octree({ minX, maxX: midX, minY, maxY: midY, minZ, maxZ: midZ }, this.depth + 1),
-      new Octree({ minX: midX, maxX, minY, maxY: midY, minZ, maxZ: midZ }, this.depth + 1),
-      new Octree({ minX, maxX: midX, minY: midY, maxY, minZ, maxZ: midZ }, this.depth + 1),
-      new Octree({ minX: midX, maxX, minY: midY, maxY, minZ, maxZ: midZ }, this.depth + 1),
-      new Octree({ minX, maxX: midX, minY, maxY: midY, minZ: midZ, maxZ }, this.depth + 1),
-      new Octree({ minX: midX, maxX, minY, maxY: midY, minZ: midZ, maxZ }, this.depth + 1),
-      new Octree({ minX, maxX: midX, minY: midY, maxY, minZ: midZ, maxZ }, this.depth + 1),
-      new Octree({ minX: midX, maxX, minY: midY, maxY, minZ: midZ, maxZ }, this.depth + 1),
-    ];
-  }
-
-  insert(obj: any) {
-    if (!this.intersects(obj.bounds)) return false;
-
-    if (this.nodes.length === 0 && this.objects.length < this.capacity) {
-      this.objects.push(obj);
-      return true;
-    }
-
-    if (this.nodes.length === 0) this.subdivide();
-
-    for (const node of this.nodes) {
-      if (node.insert(obj)) return true;
-    }
-
-    this.objects.push(obj);
-    return true;
-  }
-
-  intersects(b: any) {
-    return !(b.minX > this.bounds.maxX || b.maxX < this.bounds.minX ||
-             b.minY > this.bounds.maxY || b.maxY < this.bounds.minY ||
-             b.minZ > this.bounds.maxZ || b.maxZ < this.bounds.minZ);
-  }
-
-  query(range: any, result: any[] = []) {
-    if (!this.intersects(range)) return result;
-
-    for (const obj of this.objects) {
-      if (obj.bounds.minX < range.maxX && obj.bounds.maxX > range.minX &&
-          obj.bounds.minY < range.maxY && obj.bounds.maxY > range.minY &&
-          obj.bounds.minZ < range.maxZ && obj.bounds.maxZ > range.minZ) {
-        result.push(obj);
-      }
-    }
-
-    for (const node of this.nodes) {
-      node.query(range, result);
-    }
-
-    return result;
-  }
-}
-
-export function performStabilityCheck(blocks: any[], parts: any) {
-  const EPSILON = 0.05;
-  const supported = new Set<string>();
-  
-  const blockData = blocks.map(b => {
-    const part = PART_MAP.get(b.partId);
-    if (!part) return null;
-    const boxes = getCollisionBoxes(b.position, part, b.rotation);
-    // Combined bounds for the whole block
-    const bounds = {
-      minX: Math.min(...boxes.map(bx => bx.minX)),
-      maxX: Math.max(...boxes.map(bx => bx.maxX)),
-      minY: Math.min(...boxes.map(bx => bx.minY)),
-      maxY: Math.max(...boxes.map(bx => bx.maxY)),
-      minZ: Math.min(...boxes.map(bx => bx.minZ)),
-      maxZ: Math.max(...boxes.map(bx => bx.maxZ))
-    };
-    return { id: b.id, part, boxes, bounds };
-  }).filter(Boolean) as any[];
-
-  // 1. Find overall bounds for Octree
-  if (blockData.length === 0) return { supportedIds: new Set(), fallingIds: new Set() };
-  
-  const worldBounds = {
-    minX: Math.min(...blockData.map(d => d.bounds.minX)) - 1,
-    maxX: Math.max(...blockData.map(d => d.bounds.maxX)) + 1,
-    minY: -1,
-    maxY: Math.max(...blockData.map(d => d.bounds.maxY)) + 1,
-    minZ: Math.min(...blockData.map(d => d.bounds.minZ)) - 1,
-    maxZ: Math.max(...blockData.map(d => d.bounds.maxZ)) + 1
-  };
-
-  const tree = new Octree(worldBounds);
-  for (const b of blockData) tree.insert(b);
-
-  // 2. Identify grounded blocks
-  for (const b of blockData) {
-    if (b.part.type === 'slope_inv') continue;
-    for (const box of b.boxes) {
-      if (Math.abs(box.minY - (-0.5)) < EPSILON) {
-        supported.add(b.id);
-        break;
-      }
-    }
-  }
-
-  // 3. Connection mapping using Octree
-  const edges = new Map<string, Set<string>>();
-  for (const b of blockData) edges.set(b.id, new Set());
-
-  const hasStudsOnTop = (type: string) => ['box', 'brick', 'plate', 'corner', 'cylinder', 'cone', 'slope_inv', 'jumper', 'jumper_round', 'slope_2studs'].includes(type);
-  const hasHolesOnBottom = (type: string) => ['box', 'brick', 'plate', 'corner', 'cylinder', 'slope', 'tile', 'jumper', 'jumper_round', 'cone', 'slope_inv', 'wedge_plate', 'crystal'].includes(type);
-
-  for (const b1 of blockData) {
-    // Check for support above b1
-    const queryRange = {
-      minX: b1.bounds.minX - EPSILON, 
-      maxX: b1.bounds.maxX + EPSILON,
-      minY: b1.bounds.maxY - EPSILON, 
-      maxY: b1.bounds.maxY + EPSILON * 2,
-      minZ: b1.bounds.minZ - EPSILON, 
-      maxZ: b1.bounds.maxZ + EPSILON
-    };
-    
-    const possibleAbove = tree.query(queryRange);
-    for (const b2 of possibleAbove) {
-      if (b1.id === b2.id) continue;
-      
-      let connected = false;
-      for (const box1 of b1.boxes) {
-        for (const box2 of b2.boxes) {
-          const overlapXZ = box1.minX < box2.maxX - EPSILON &&
-                            box1.maxX > box2.minX + EPSILON &&
-                            box1.minZ < box2.maxZ - EPSILON &&
-                            box1.maxZ > box2.minZ + EPSILON;
-          if (overlapXZ && Math.abs(box2.minY - box1.maxY) < EPSILON) {
-             if (hasStudsOnTop(b1.part.type) && hasHolesOnBottom(b2.part.type)) {
-                connected = true;
-                break;
-             }
-          }
-        }
-        if (connected) break;
-      }
-      
-      if (connected) {
-        edges.get(b1.id)?.add(b2.id);
-        edges.get(b2.id)?.add(b1.id);
-      }
-    }
-  }
-
-  // 4. Reachability propagation
-  const queue = Array.from(supported);
-  while (queue.length > 0) {
-    const currId = queue.shift()!;
-    const neighbors = edges.get(currId);
-    if (neighbors) {
-      for (const nextId of neighbors) {
-        if (!supported.has(nextId)) {
-          supported.add(nextId);
-          queue.push(nextId);
-        }
-      }
-    }
-  }
-
-  const fallingIds = new Set<string>();
-  for (const b of blocks) {
-    if (!supported.has(b.id)) fallingIds.add(b.id);
-  }
-  
-  return { supportedIds: supported, fallingIds };
-}
 
 /**
  * Component for animating a group of falling blocks.
@@ -1220,7 +307,8 @@ const InstancedBlocksGroup = React.memo(({
     
     blocks.forEach((b: any) => {
       if (b.partId === 'logic_battery') return; // rendering separately
-      if (b.partId === 'logic_td_spawn' || b.partId === 'logic_td_crystal' || b.partId === 'logic_td_crystal_v2' || b.partId === 'logic_td_tower_rapid' || b.partId === 'logic_td_tower_heavy') return;
+      const cat = getCategory(b.partId);
+      if (cat === 'spawner' || cat === 'objective' || cat === 'tower') return;
 
       let colorMeta = (COLOR_MAP.get(b.color) || { value: b.color }) as any;
       
@@ -1830,16 +918,15 @@ const calculateAvailableBudget = (blocks: any[]) => {
  * - Displaying the Floating UI for Parts, Color Selection, and Statistics.
  */
 export default function App() {
-  const [blocks, setBlocks] = useState<any[]>([]);
+  const [blocks, setBlocks] = useState<Block[]>([]);
   const [gameMode, setGameMode] = useState<'build' | 'play'>('build');
-  const [tdTicks, setTdTicks] = useState(0);
   const [crystalHp, setCrystalHp] = useState(20);
   const [budget, setBudget] = useState(300);
   const [wave, setWave] = useState(1);
-  const historyRef = useRef<any[][]>([[]]);
+  const historyRef = useRef<Block[][]>([[]]);
   const historyIndexRef = useRef(0);
   
-  const updateBlocks = useCallback((newBlocks: any[]) => {
+  const updateBlocks = useCallback((newBlocks: Block[]) => {
     const newHistory = historyRef.current.slice(0, historyIndexRef.current + 1);
     newHistory.push(newBlocks);
     historyRef.current = newHistory;
@@ -1895,33 +982,7 @@ export default function App() {
     };
   }, []);
 
-  const parseSaveFile = useCallback((content: string) => {
-    const lines = content.split('\n');
-    const newBlocks: any[] = [];
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('=') || trimmed.startsWith('-') || trimmed.startsWith('PART-ID') || trimmed.startsWith('BRICKCRAFT')) continue;
-      const parts = trimmed.split(/\s+/);
-      if (parts.length >= 6) {
-        const px = parseFloat(parts[1]);
-        const py = parseFloat(parts[2]);
-        const pz = parseFloat(parts[3]);
-        const rot = parseInt(parts[4], 10);
-        const color = parts[5];
-        const material = parts[6] || 'solid';
-        if (isNaN(px) || isNaN(py) || isNaN(pz)) continue;
-        newBlocks.push({
-          id: Math.random().toString(36).substring(2, 9),
-          partId: parts[0],
-          position: [px / 2 - 32, py - 0.5, pz / 2 - 32], 
-          rotation: isNaN(rot) ? 0 : rot,
-          color: color,
-          material: material
-        });
-      }
-    }
-    return newBlocks;
-  }, []);
+  
 
   const onSelect = useCallback((id: string) => {
     setSelectedIds(prev => {
@@ -2005,67 +1066,7 @@ export default function App() {
   }, [blocks, logicState]);
 
   useEffect(() => {
-    const logicBlocks = blocks.filter(b => b.partId.startsWith('logic_'));
-    const nextState: Record<string, number> = {};
-    
-    // Batteries that are active get full power (15)
-    logicBlocks.forEach(b => {
-      if (b.partId === 'logic_battery' && b.meta?.isOn) {
-        nextState[b.id] = 15;
-      }
-    });
-
-    let queue = logicBlocks.filter(b => nextState[b.id] === 15);
-    
-    while(queue.length > 0) {
-      const current = queue.shift();
-      if (!current) continue;
-      const currentPower = nextState[current.id];
-      if (currentPower <= 1) continue;
-      
-      logicBlocks.forEach(neighbor => {
-        if (neighbor.id === current.id || neighbor.partId === 'logic_battery') return;
-        
-        const cPart = PART_MAP.get(current.partId);
-        const nPart = PART_MAP.get(neighbor.partId);
-        if (!cPart || !nPart) return;
-
-        const cxSize = (current.rotation % 2 === 1 ? cPart.size[1] : cPart.size[0]) * 0.5;
-        const czSize = (current.rotation % 2 === 1 ? cPart.size[0] : cPart.size[1]) * 0.5;
-        const nxSize = (neighbor.rotation % 2 === 1 ? nPart.size[1] : nPart.size[0]) * 0.5;
-        const nzSize = (neighbor.rotation % 2 === 1 ? nPart.size[0] : nPart.size[1]) * 0.5;
-        
-        const dx = Math.abs(neighbor.position[0] - current.position[0]);
-        const dz = Math.abs(neighbor.position[2] - current.position[2]);
-        const dy = Math.abs(neighbor.position[1] - current.position[1]);
-        
-        // Touch condition with tolerance for grid misalignment
-        const dxMax = (cxSize + nxSize) / 2 + 0.2;
-        const dzMax = (czSize + nzSize) / 2 + 0.2;
-
-        const touchX = dx <= dxMax;
-        const touchZ = dz <= dzMax;
-        
-        // Check if it's purely diagonal (touching only on the corner)
-        // If dx is close to dxMax AND dz is close to dzMax, it's diagonal.
-        const isDiagonal = dx > dxMax - 0.35 && dz > dzMax - 0.35;
-        
-        let isValidTouch = touchX && touchZ && !isDiagonal;
-        if (current.partId === 'logic_battery' || neighbor.partId === 'logic_battery') {
-           isValidTouch = touchX && touchZ; // Allows diagonal "schräg dazu" for battery
-        }
-        
-        // Height check - must basically touch on Y
-        const touchY = dy <= (cPart.size[2] + nPart.size[2]) / 2 + 0.1;
-        
-        if (isValidTouch && touchY) {
-          if (!nextState[neighbor.id]) {
-            nextState[neighbor.id] = 15; // Unbegrenzte Reichweite
-            queue.push(neighbor);
-          }
-        }
-      });
-    }
+    const nextState = calculateLogicState(blocks);
 
     setLogicState(prev => {
       // Deep compare to prevent infinite re-renders or unnecessary updates
@@ -2089,6 +1090,7 @@ export default function App() {
   const ghostRef = useRef<THREE.Group>(null);
   const footprintRef = useRef<THREE.Group>(null);
   const ghostMaterialRef = useRef<THREE.MeshPhysicalMaterial>(null);
+  const [baseGhostMaterial] = useState(() => getGhostMaterial('#ffffff', isNightMode));
   const ghostEdgesRef = useRef<THREE.LineBasicMaterial>(null);
   const hudHeightRef = useRef<HTMLSpanElement>(null);
   const lastValidRef = useRef<boolean>(true);
@@ -2139,8 +1141,6 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeCategory, setActiveCategory] = useState<'All' | 'Brick' | 'Plate' | 'Tile' | 'Round' | 'Special'>('All');
   const [showGrid, setShowGrid] = useState(false);
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [isAiLoading, setIsAiLoading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [simulationMessage, setSimulationMessage] = useState<{ text: string, type: 'success' | 'warning' | 'error' } | null>(null);
   const [isShiftActive, setIsShiftActive] = useState(false);
@@ -2157,7 +1157,7 @@ export default function App() {
            if (allBlocks.length === 0) return;
 
            let center = new THREE.Vector3();
-           const crystal = allBlocks.find(b => b.partId === 'logic_td_crystal' || b.partId === 'logic_td_crystal_v2');
+           const crystal = allBlocks.find(b => getCategory(b.partId) === 'objective');
            if (crystal) {
                const p = normalizePos(crystal.position);
                center.set(p[0], p[1], p[2]);
@@ -2199,10 +1199,9 @@ export default function App() {
         setBudget(calculateAvailableBudget(blocksRef.current));
     };
 
-    return tdEngine.subscribe((ticks) => {
-      setTdTicks(ticks);
-      setCrystalHp(tdEngine.crystalHp);
-    });
+    tdEngine.onCrystalHit = () => {
+        setCrystalHp(tdEngine.crystalHp);
+    };
   }, []);
 
   useEffect(() => {
@@ -2221,8 +1220,8 @@ export default function App() {
   const handleTogglePlay = useCallback(() => {
     if (gameMode === 'build') {
       try {
-        const spanwers = blocksRef.current.filter(b => b.partId === 'logic_td_spawn');
-        const crystals = blocksRef.current.filter(b => b.partId === 'logic_td_crystal' || b.partId === 'logic_td_crystal_v2');
+        const spanwers = blocksRef.current.filter(b => getCategory(b.partId) === 'spawner');
+        const crystals = blocksRef.current.filter(b => getCategory(b.partId) === 'objective');
 
         if (spanwers.length !== 1 || crystals.length !== 1) {
           setSimulationMessage({ text: 'Exakt 1 Gegner-Spawn und 1 Energie-Kristall werden benötigt!', type: 'error' });
@@ -2260,6 +1259,7 @@ export default function App() {
         }
         
         tdEngine.setPath(path);
+        tdEngine.setGrid(grid);
         
         tdEngine.softReset();
 
@@ -2371,8 +1371,6 @@ export default function App() {
   const lastMousePos = useRef({ x: 0, y: 0 });
 
   const blocksRef = useRef(blocks);
-  useEffect(() => { blocksRef.current = blocks; }, [blocks]);
-
   const isDrag = useCallback((e: any) => {
     const cx = e.nativeEvent?.clientX ?? e.clientX ?? e.touches?.[0]?.clientX ?? 0;
     const cy = e.nativeEvent?.clientY ?? e.clientY ?? e.touches?.[0]?.clientY ?? 0;
@@ -2382,6 +1380,16 @@ export default function App() {
     const dragging = dist > 8;
     return dragging;
   }, []);
+
+  const collisionGridRef = useRef(new CoordinateLookup());
+  useEffect(() => { 
+      blocksRef.current = blocks; 
+      collisionGridRef.current.clear();
+      for (const b of blocks) {
+          const p = PART_MAP.get(b.partId);
+          if (p) collisionGridRef.current.addBlock(b.position, p, b.rotation || 0);
+      }
+  }, [blocks]);
 
   const geometries = useBrickGeometries();
   const currentPart = useMemo(() => PART_MAP.get(currentPartId) || PARTS[0], [currentPartId]);
@@ -2427,11 +1435,7 @@ export default function App() {
           pos[2] - hd >= -50 && pos[2] + hd <= 50 &&
           pos[1] <= 50;
 
-        const hasCollision = blocksRef.current.some(b => {
-          const bPart = PART_MAP.get(b.partId);
-          if (!bPart) return false;
-          return checkCollision(pos, currentPart, currentRotation, b.position, bPart, b.rotation);
-        });
+        const hasCollision = collisionGridRef.current.hasCollision(pos, currentPart, currentRotation);
         
         const nextValid = inBounds && !hasCollision && pos[1] >= -0.45;
         
@@ -2444,31 +1448,20 @@ export default function App() {
         const baseColor = nextValid ? previewColor : '#ff0000';
 
         ghostRef.current.traverse((child: any) => {
-           if (child.isMesh && child.material && child.material.type !== 'LineBasicMaterial') {
-               const mat = child.material;
-               if (mat.color && mat.color.set) mat.color.set(baseColor);
-               mat.opacity = nextValid ? 0.5 : 0.8;
-               if (mat.emissive && mat.emissive.set) {
-                   if (isNightMode) {
-                      mat.emissive.set(nextValid ? previewColor : '#330000');
-                      mat.emissiveIntensity = nextValid ? 0.8 : 1.0;
-                   } else {
-                      mat.emissive.set(nextValid ? '#000000' : '#ff0000');
-                      mat.emissiveIntensity = nextValid ? 0.2 : 4.0;
-                   }
-               }
+           if (child.isMesh) {
+               child.raycast = () => null;
            }
         });
 
-        if (ghostMaterialRef.current) {
-           ghostMaterialRef.current.color.set(baseColor);
-           ghostMaterialRef.current.opacity = nextValid ? 0.5 : 0.8;
+        if (baseGhostMaterial) {
+           baseGhostMaterial.color.set(baseColor);
+           baseGhostMaterial.opacity = nextValid ? 0.4 : 0.8;
            if (isNightMode) {
-              ghostMaterialRef.current.emissive.set(nextValid ? previewColor : '#330000');
-              ghostMaterialRef.current.emissiveIntensity = nextValid ? 0.8 : 1.0;
+              baseGhostMaterial.emissive.set(nextValid ? previewColor : '#330000');
+              baseGhostMaterial.emissiveIntensity = nextValid ? 0.8 : 1.0;
            } else {
-              ghostMaterialRef.current.emissive.set(nextValid ? '#000000' : '#ff0000');
-              ghostMaterialRef.current.emissiveIntensity = nextValid ? 0.2 : 4.0;
+              baseGhostMaterial.emissive.set(nextValid ? '#000000' : '#ff0000');
+              baseGhostMaterial.emissiveIntensity = nextValid ? 0.2 : 0.8;
            }
         }
         if (ghostEdgesRef.current) {
@@ -2509,11 +1502,7 @@ export default function App() {
       pos[2] - hd >= -32 && pos[2] + hd <= 32 &&
       pos[1] <= 32;
 
-    const hasCollision = blocks.some(b => {
-      const bPart = PART_MAP.get(b.partId);
-      if (!bPart) return false;
-      return checkCollision(pos, currentPart, currentRotation, b.position, bPart, b.rotation);
-    });
+    const hasCollision = collisionGridRef.current.hasCollision(pos, currentPart, currentRotation);
 
       if (inBounds && !hasCollision && pos[1] >= -0.45) {
         AudioEngine.playClick();
@@ -2599,45 +1588,23 @@ export default function App() {
    * Maps internal coordinate system to user-friendly stud values (0-128).
    */
   const handleSave = () => {
-    let data = "================================================================================\n";
-    data += "BRICKCRAFT SAVE - BOUNDED GRID (64x32x64)\n";
-    data += "================================================================================\n";
-    data += "PART-ID".padEnd(20) + "X".padEnd(10) + "Y".padEnd(10) + "Z".padEnd(10) + "ROT".padEnd(10) + "COLOR".padEnd(10) + "MATERIAL\n";
-    data += "----------------------------------------------------------------------------------------------------\n";
-    
-    blocks.forEach(b => {
-      const p = normalizePos(b.position);
-      // Coordinate Mapping: internal units -> stud system
-      const outX = (p[0] + 32) * 2; 
-      const outZ = (p[2] + 32) * 2; 
-      const normalizedY = p[1] + 0.5;
-      
-      data += b.partId.padEnd(20) + 
-              outX.toFixed(2).padEnd(10) + 
-              normalizedY.toFixed(2).padEnd(10) + 
-              outZ.toFixed(2).padEnd(10) + 
-              b.rotation.toString().padEnd(10) + 
-              b.color.padEnd(10) + 
-              (b.material || 'solid') + "\n";
+    const data = generateSaveData(blocks);
+    requestAnimationFrame(() => {
+       const blob = new Blob([data], { type: 'text/plain' });
+       const url = URL.createObjectURL(blob);
+       const a = document.createElement('a');
+       a.href = url;
+       a.download = `brick_build_${new Date().getTime()}.txt`;
+       a.click();
+       URL.revokeObjectURL(url);
     });
-    
-    const blob = new Blob([data], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'brickcraft_save.txt';
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
-  /**
-   * Deserializes a save file and updates the world state.
-   * Includes specific filtering to ignore file headers and metadata lines.
-   */
-  const handleLoad = (e: any) => {
-    const file = e.target.files[0];
+  const handleLoad = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
     if (!file) return;
     setIsLoading(true);
+    setSimulationMessage({ text: 'Lade Steine...', type: 'warning' });
     requestAnimationFrame(() => {
        requestAnimationFrame(() => {
           const reader = new FileReader();
@@ -2653,90 +1620,13 @@ export default function App() {
                  setTimeout(() => setSimulationMessage(null), 3000);
               }
               setIsLoading(false);
-          };
-          reader.readAsText(file);
-       });
+           };
+           reader.readAsText(file);
+        });
     });
     e.target.value = '';
   };
 
-  const handleAiBuild = async () => {
-    if (!aiPrompt.trim() || isAiLoading) return;
-    setIsAiLoading(true);
-    try {
-      const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
-      const partsList = PARTS.map(p => p.id).join(', ');
-      const colorsList = COLORS.map(c => `${c.name}: ${c.value}`).join(', ');
-      const systemPrompt = `You are an expert 3D Brick Architect for a digital building simulator. 
-Your task is to generate a JSON array of blocks to build the user's request.
-
-COORDINATE SYSTEM:
-- World Space: X (left/right), Y (up/down), Z (front/back).
-- Floor Level: All models MUST start on the floor (y = -0.5 is the baseplate).
-- Vertical alignment (Y):
-  * Center of a Brick sitting on the floor: y = -0.2 (world height 0.6)
-  * Center of a Plate sitting on the floor: y = -0.4 (world height 0.2)
-  * Stacking: Add 0.6 to y for each brick layer. Add 0.2 to y for each plate layer.
-- Horizontal alignment (X/Z): Use steps of 0.5.
-
-STRUCTURAL RULES:
-1. VOLUMETRIC 3D: Build in all three dimensions (X, Y, and Z). Avoid flat 2D silhouettes. Create depth, thickness, and volume.
-2. SOLIDS: Surfaces should be closed where possible. Gaps should be intentional features, not structural bugs.
-3. GROUNDING: The bottom-most layer of the model MUST be placed exactly on the floor or connected to the ground. No floating parts.
-4. GRID SNAP: Ensure all coordinates are perfectly aligned to the grid (0.5 increments for X/Z).
-5. LIMITS: Max 80 blocks. Use a mix of bricks and plates for detail.
-
-ALLOWED PARTS: ${partsList}
-ALLOWED COLORS: ${colorsList}
-
-OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "partId", "color", "rotation" (0-3). No markdown.`;
-      const response = await genAI.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Build: ${aiPrompt}`,
-        config: { systemInstruction: systemPrompt, responseMimeType: "application/json" }
-      });
-      const generatedBlocks = JSON.parse(response.text);
-      if (generatedBlocks && generatedBlocks.length > 0) {
-        // 1. Find the lowest point to offset the whole model to the floor
-        let minY = Infinity;
-        generatedBlocks.forEach((b: any) => {
-          if (b.position && typeof b.position[1] === 'number') {
-            const isPlate = b.partId?.includes('plate') || b.partId?.includes('tile');
-            const worldH = isPlate ? (PLATE_HEIGHT * GRID_UNIT_HEIGHT) : GRID_UNIT_HEIGHT;
-            const bottom = b.position[1] - (worldH / 2);
-            if (bottom < minY) minY = bottom;
-          }
-        });
-
-        // Current baseplate floor is at y = -0.5
-        const yOffset = -0.5 - minY;
-
-        // 2. Apply offset and strict grid snapping
-        const cleanedBlocks = generatedBlocks.map((b: any, i: number) => {
-          const px = Math.round(b.position[0] * 2) / 2;
-          const py = b.position[1] + yOffset;
-          const pz = Math.round(b.position[2] * 2) / 2;
-          
-          return {
-            ...b,
-            id: `ai-${Date.now()}-${i}`,
-            position: [px, py, pz],
-            rotation: Math.max(0, Math.min(3, Math.round(b.rotation || 0)))
-          };
-        });
-
-        updateBlocks([...blocks, ...cleanedBlocks]);
-      }
-      setAiPrompt('');
-      setSimulationMessage({ text: 'KI hat das Modell herbeigezaubert!', type: 'success' });
-      setTimeout(() => setSimulationMessage(null), 3000);
-    } catch (err) {
-      console.error("AI Build failed:", err);
-      setSimulationMessage({ text: 'KI Baufehler.', type: 'error' });
-      setTimeout(() => setSimulationMessage(null), 3000);
-    } finally { setIsAiLoading(false); }
-  };
-  
   /**
    * Global Event Listeners: Handles keyboard shortcuts (Undo/Redo, Rotation)
    * and the complex "Shift-Lock" vertical placement mode.
@@ -2859,12 +1749,6 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
           </div>
           
           <div className="h-6 w-[1px] bg-gray-200" />
-
-          {gameMode === 'play' && (
-             <div className="flex bg-gray-100 p-1 rounded-xl items-center text-[10px] font-black uppercase tracking-widest text-gray-500 px-3">
-               TD Ticks: {tdTicks}
-             </div>
-          )}
 
           <button 
              onClick={handleTogglePlay}
@@ -3046,7 +1930,7 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                              key={p.id}
                              onClick={() => {
                                setCurrentPartId(p.id);
-                               if (p.id === 'logic_td_crystal' || p.id === 'logic_td_crystal_v2') {
+                               if (getCategory(p.id) === 'objective') {
                                  setCurrentColor('#AEE9EF');
                                  setCurrentMaterial('trans');
                                }
@@ -3198,37 +2082,6 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                        license="Creative Commons" 
                        content={["Audio provided by ElevenLabs.", "https://elevenlabs.io/music/lofi", "", "All Lo-Fi beats and sound effects were synthesized using generative AI technologies for creative experimentation."].join('\n')}
                      />
-                   </div>
-                </section>
-
-                <section className="pt-10">
-                   <div className="p-6 bg-gray-900 rounded-[32px] shadow-2xl relative overflow-hidden group">
-                      <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity"><Wind size={80} /></div>
-                      <p className="text-[9px] text-blue-400 font-bold uppercase tracking-[0.3em] mb-4">Experimental Feature</p>
-                      <h3 className="text-sm font-black text-white mb-2">Neural Algorithm Build</h3>
-                      <p className="text-[10px] text-white/50 mb-6 leading-relaxed">
-                        Die KI-Konstruktion ist nun ein verstecktes Feature für fortgeschrittene Nutzer. 
-                        Beschreiben Sie Ihre Architektur-Idee in Kurzform.
-                      </p>
-                      
-                      <div className="space-y-4">
-                        <textarea 
-                           rows={3}
-                           placeholder="z.B. Ein roter Turm mit Glasfenstern..."
-                           value={aiPrompt}
-                           onChange={(e) => setAiPrompt(e.target.value)}
-                           className="w-full px-4 py-4 bg-white/5 border border-white/10 rounded-2xl text-[11px] font-medium text-white outline-none focus:ring-4 focus:ring-blue-500/20 placeholder:text-white/20 transition-all resize-none"
-                           disabled={isAiLoading}
-                        />
-                        
-                        <button 
-                          onClick={handleAiBuild}
-                          disabled={isAiLoading || !aiPrompt.trim()}
-                          className={`w-full py-4 rounded-xl text-[10px] font-black uppercase tracking-[0.1em] transition-all ${isAiLoading ? 'bg-white/5 text-white/20 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-500 active:scale-95'}`}
-                        >
-                          {isAiLoading ? 'Algorithmus läuft...' : 'Konstruktion starten'}
-                        </button>
-                      </div>
                    </div>
                 </section>
               </div>
@@ -3888,28 +2741,14 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
         ))}
 
         {/* Ghost Block along with Footprint Shadow */}
-        {(geometries[currentPartId] || currentPartId === 'logic_td_crystal' || currentPartId === 'logic_td_crystal_v2') && (
+        {(geometries[currentPartId] || getCategory(currentPartId) === 'objective') && (
           <group ref={ghostRef} visible={false}>
             {currentPartId === 'logic_td_crystal' ? (
-                <CrystalGeometry color={currentColor} />
+                <CrystalGeometry material={baseGhostMaterial} />
             ) : currentPartId === 'logic_td_crystal_v2' ? (
-                <CrystalGeometryV2 color={currentColor} />
+                <CrystalGeometryV2 material={baseGhostMaterial} />
             ) : (
-                <mesh geometry={geometries[currentPartId]?.visual} raycast={() => null}>
-                   <meshPhysicalMaterial 
-                      ref={ghostMaterialRef}
-                      color={currentColor}
-                      transparent 
-                      opacity={0.5}
-                      roughness={0.4}
-                      roughnessMap={roughnessMap}
-                      normalMap={normalMap}
-                      normalScale={new THREE.Vector2(0.1, 0.1)}
-                      depthWrite={false}
-                      emissive={isNightMode ? currentColor : '#000000'}
-                      emissiveIntensity={isNightMode ? 0.8 : 0.2}
-                      toneMapped={!PART_MAP.get(currentPartId)?.id?.includes('logic')}
-                   />
+                <mesh geometry={geometries[currentPartId]?.visual} raycast={() => null} material={baseGhostMaterial}>
                    <lineSegments raycast={() => null}>
                       <edgesGeometry args={[geometries[currentPartId]?.edges || geometries[currentPartId]?.visual]} />
                       <lineBasicMaterial ref={ghostEdgesRef} color={isNightMode ? "#888888" : "black"} opacity={0.3} transparent depthTest={true} />
@@ -3926,6 +2765,20 @@ OUTPUT: A valid raw JSON array of objects with keys: "position" ([x,y,z]), "part
                  <meshBasicMaterial color="#000000" transparent opacity={0.3} depthWrite={false} />
               </mesh>
             </group>
+
+            {/* Tower Range Indicator */}
+            {(getCategory(currentPartId) === 'tower') && (
+               <group position={[0, -0.19, 0]}>
+                   <mesh rotation={[-Math.PI/2, 0, 0]} raycast={() => null} renderOrder={1}>
+                      <circleGeometry args={[TowerRegistry[currentPartId]?.range || 6, 64]} />
+                      <meshBasicMaterial color={TowerRegistry[currentPartId]?.color || '#ff8800'} transparent opacity={0.1} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+                   </mesh>
+                   <mesh rotation={[-Math.PI/2, 0, 0]} raycast={() => null} renderOrder={2}>
+                      <ringGeometry args={[(TowerRegistry[currentPartId]?.range || 6) - 0.2, TowerRegistry[currentPartId]?.range || 6, 64]} />
+                      <meshBasicMaterial color={TowerRegistry[currentPartId]?.color || '#ff8800'} transparent opacity={0.5} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+                   </mesh>
+               </group>
+            )}
           </group>
         )}
 
