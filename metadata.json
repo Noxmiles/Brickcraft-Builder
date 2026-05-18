@@ -1,6 +1,6 @@
 {
-  "name": "Brickcraft Builder",
-  "description": "A high-performance 3D construction engine with AI assistance and multi-block selection.",
+  "name": "Brickcraft Builder Tower Defense",
+  "description": "Build epic toy brick structures and defend them from lawyer armies! Features real-time voxel building, logic circuits, and a high-performance TD engine.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

@@ -1,20 +1,26 @@
 <div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+  <h2>🧱 Brickcraft Builder: Tower Defense ⚖️</h2>
+  <p><i>Building against the Horde of Litigation</i></p>
+  <img width="800" alt="GHBanner" src="./banner.png" />
 </div>
 
-# Brickcraft Builder & Tower Defense
+# 🧱 Brickcraft Builder & Tower Defense
+
+### Build. Defend. Survive the Litigation! ⚖️
 
 A high-performance, voxel-based building simulator combined with a fully-fledged Tower Defense game engine. Built with React and Three.js (`@react-three/fiber`).
-
-View your app in AI Studio: https://ai.studio/apps/b6ef3c3b-406b-4412-8753-e44a313cb8ef
 
 ---
 
 ## 🎯 Overview
 
-This application consists of two deeply integrated systems:
-1.  **Builder Mode**: A free-form 3D sandbox where users place Lego-like bricks, plates, and electronic components. It features grid-snapping, structural physics (gravity), collision detection, and logic propagation (electrical circuits).
-2.  **Tower Defense Mode**: A game engine where the user's custom-built structures become the playing field. Enemies pathfind around (or over) the placed blocks to reach a central crystal, while tower blocks shoot projectiles. 
+**Brickcraft Builder Tower Defense** is more than just a voxel sandbox. It's a strategic battle between creativity and corporate greed. 
+
+1.  **Builder Mode**: A free-form 3D sandbox. Place bricks, plates, and logic components. Features grid-snapping, structural physics (gravity), and logic propagation.
+2.  **Tower Defense Mode**: The "Lawyer Army" is coming to shut down your creative project! They want to destroy your **Energy Crystal**. Use your build as the battlefield—place towers (Paragraph Canons, Stock Shredders) to fend them off!
+
+## ⚔️ The Enemy: The Lawyer Horde
+Pathfinding around your creations, these suit-clad mini-figures will stop at nothing to reach your core. They utilize A* Voxel pathfinding to find the most efficient route through your maze.
 
 ## 🧠 For Developers & AI Agents (Architecture Guidelines)
 

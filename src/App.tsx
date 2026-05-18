@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { TEMPLATES } from './templates';
 import { Volume2, VolumeX, Music, Wind, Search, Info, ExternalLink, ChevronDown, ChevronUp, Zap, Hand, MousePointer2, Hammer, Paintbrush, Undo2, Redo2, X } from 'lucide-react';
-import { COLORS, COLOR_MAP, PLATE_HEIGHT, BRICK_HEIGHT, GRID_UNIT_WIDTH, GRID_UNIT_HEIGHT, STUD_HEIGHT, STUD_RADIUS, PARTS, PART_MAP } from './builder/partsData';
+import { COLORS, COLOR_MAP, PLATE_HEIGHT, BRICK_HEIGHT, GRID_UNIT_WIDTH, GRID_UNIT_HEIGHT, STUD_HEIGHT, STUD_RADIUS, PARTS, PART_MAP, getCategory } from './builder/partsData';
 import { getGridPos, normalizePos } from './builder/grid';
 import { CoordinateLookup, getCollisionBoxes } from './builder/collision';
 import { calculateLogicState } from './builder/logic';
@@ -1090,7 +1090,6 @@ export default function App() {
   const ghostRef = useRef<THREE.Group>(null);
   const footprintRef = useRef<THREE.Group>(null);
   const ghostMaterialRef = useRef<THREE.MeshPhysicalMaterial>(null);
-  const [baseGhostMaterial] = useState(() => getGhostMaterial('#ffffff', isNightMode));
   const ghostEdgesRef = useRef<THREE.LineBasicMaterial>(null);
   const hudHeightRef = useRef<HTMLSpanElement>(null);
   const lastValidRef = useRef<boolean>(true);
@@ -1133,6 +1132,7 @@ export default function App() {
 
   const [isNightMode, setIsNightMode] = useState(false);
   const [envIntensity, setEnvIntensity] = useState(1.0);
+  const [baseGhostMaterial] = useState(() => getGhostMaterial('#ffffff', isNightMode));
 
   useEffect(() => {
     setEnvIntensity(isNightMode ? 0.4 : 1.0);
@@ -1919,7 +1919,7 @@ export default function App() {
                  <section>
                      <div className="space-y-4 mb-6 px-1">
                       <h3 className="text-[10px] uppercase tracking-[0.25em] font-black text-gray-400">Tower Defense Logik</h3>
-                      <p className="text-xs text-gray-500">Kombiniere Spawn, Kristall und Türme, um dein eigenes Level zu bauen. Klicke auf Play, um die Simulation zu starten!</p>
+                      <p className="text-xs text-gray-500">Verteidige deinen Brick-Kristall gegen die anrückende Anwalts-Horde! Baue Türme und Spawns, um den Rechtsstreit zu gewinnen.</p>
                    </div>
                    <div className="grid grid-cols-2 gap-3">
                       {['logic_td_spawn', 'logic_td_crystal', 'logic_td_crystal_v2', 'logic_td_tower_rapid', 'logic_td_tower_heavy'].map(partId => {
